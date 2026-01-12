@@ -6,7 +6,17 @@ export interface VitalReading {
   isImputed: boolean;
 }
 
+export interface AlertRule {
+  id: string;
+  name: string;
+  riskThreshold: number;
+  sustainedDuration: number; // minutes
+  rateOfChangeThreshold: number; // percentage points per 30 min
+  enabled: boolean;
+}
+
 export interface Feature {
+  key: string;
   name: string;
   unit: string;
   readings: VitalReading[];
@@ -22,6 +32,8 @@ export interface RiskDataPoint {
 export interface Patient {
   icuId: string;
   bedNumber: string;
+  ward: string;
+  department: string;
   age: number;
   sex: 'F' | 'M';
   currentRisk: number; // 0-100
@@ -31,6 +43,7 @@ export interface Patient {
   imputedDataPercentage: number; // 0-100
   topContributors: string[];
   alertStatus: 'sustained-high' | 'rapid-increase' | 'stale-data' | 'normal';
+  alertRules?: AlertRule[];
   features: Feature[];
 }
 
@@ -163,8 +176,44 @@ const FEATURE_TEMPLATES: FeatureTemplate[] = [
   { key: 'fio2', name: 'Inspired O2 fraction (FiO2)', unit: 'fraction', normalRange: [0.21, 0.6], baseValue: 0.35, variance: 0.25, min: 0.21, max: 1.0, round: 2 },
   { key: 'gcs_verbal', name: 'GCS – verbal', unit: 'score', normalRange: [4, 5], baseValue: 4.3, variance: 1, min: 1, max: 5, round: 0, discrete: true },
   { key: 'gcs_motor', name: 'GCS – motor', unit: 'score', normalRange: [5, 6], baseValue: 5.4, variance: 1, min: 1, max: 6, round: 0, discrete: true },
-  { key: 'delta_vital_hr', name: 'delta_vital_hr', unit: 'hr', normalRange: [0, 4], baseValue: 1.4, variance: 2.5, min: 0, max: 12, round: 1 },
-  { key: 'delta_lab_hr', name: 'delta_lab_hr', unit: 'hr', normalRange: [0, 12], baseValue: 4.5, variance: 6, min: 0, max: 24, round: 1 },
+];
+
+const WARDS = [
+  '76병동 4호 2',
+  '61병동 12호 3',
+  'MICU Bed 8',
+  'MICU 격리실3',
+  '102병동 9호 6',
+  '52병동 1호 2',
+  'SICU Bed 10',
+  '81병동 처치실',
+  '96병동 2호 6',
+  '95병동 3호 1',
+  '41병동 7호 5',
+  '41병동 7호 4',
+  '81병동 처치실',
+  '102병동 9호 6',
+  'MICU 격리실1',
+  '95병동 3호 23',
+];
+
+const DEPARTMENTS = [
+  '감염내과',
+  '호흡기내과',
+  '순환기내과',
+  '호흡기내과',
+  '혈액종양내과',
+  '외과',
+  '흉부외과',
+  '노인내과',
+  '신장내과',
+  '흉부외과',
+  '산부인과',
+  '흉부외과',
+  '산부인과',
+  '노인내과',
+  '흉부외과',
+  '노인내과',
 ];
 
 const ALERT_PROFILES = [
@@ -173,7 +222,7 @@ const ALERT_PROFILES = [
     trend: 'increasing' as const,
     changeInLast30Min: 12,
     alertStatus: 'rapid-increase' as const,
-    imputedDataPercentage: 8,
+    imputedDataPercentage: 0,
     topContributors: ['BUN ↑', 'SpO2 ↓', 'Creatinine ↑'],
   },
   {
@@ -181,7 +230,7 @@ const ALERT_PROFILES = [
     trend: 'stable' as const,
     changeInLast30Min: -2,
     alertStatus: 'normal' as const,
-    imputedDataPercentage: 12,
+    imputedDataPercentage: 0,
     topContributors: ['Age', 'GCS ↓', 'RR ↑'],
   },
   {
@@ -189,7 +238,7 @@ const ALERT_PROFILES = [
     trend: 'stable' as const,
     changeInLast30Min: 1,
     alertStatus: 'sustained-high' as const,
-    imputedDataPercentage: 15,
+    imputedDataPercentage: 0,
     topContributors: ['SpO2 ↓↓', 'pO2 ↓', 'SBP ↓'],
   },
   {
@@ -197,7 +246,7 @@ const ALERT_PROFILES = [
     trend: 'decreasing' as const,
     changeInLast30Min: -8,
     alertStatus: 'normal' as const,
-    imputedDataPercentage: 5,
+    imputedDataPercentage: 0,
     topContributors: ['Albumin ↓', 'Age', 'Platelets ↓'],
   },
   {
@@ -205,7 +254,7 @@ const ALERT_PROFILES = [
     trend: 'stable' as const,
     changeInLast30Min: 0,
     alertStatus: 'stale-data' as const,
-    imputedDataPercentage: 42,
+    imputedDataPercentage: 0,
     topContributors: ['FiO2 ↑', 'pCO2 ↑', 'SpO2 ↓'],
   },
   {
@@ -213,7 +262,7 @@ const ALERT_PROFILES = [
     trend: 'increasing' as const,
     changeInLast30Min: 7,
     alertStatus: 'normal' as const,
-    imputedDataPercentage: 18,
+    imputedDataPercentage: 0,
     topContributors: ['INR ↑', 'Platelet ↓', 'Bilirubin ↑'],
   },
 ];
@@ -243,6 +292,7 @@ function buildFeatures(profileIndex: number): Feature[] {
     });
 
     return {
+      key: template.key,
       name: template.name,
       unit: template.unit,
       readings,
@@ -256,6 +306,8 @@ function createPatient(index: number): Patient {
   const profile = ALERT_PROFILES[index % ALERT_PROFILES.length];
   const stayId =  + index * 17 + 25;
   const bedNumber = `ICU-${stayId}`;
+  const ward = WARDS[index % WARDS.length];
+  const department = DEPARTMENTS[index % DEPARTMENTS.length];
   const minutesAgoOptions = [2, 3, 5, 7, 12, 25];
   const minutesAgo = minutesAgoOptions[index % minutesAgoOptions.length];
   const riskJitter = (seededRandom(index + 1) - 0.5) * 22;
@@ -276,6 +328,8 @@ function createPatient(index: number): Patient {
   return {
     icuId: String(stayId),
     bedNumber,
+    ward,
+    department,
     age,
     sex,
     currentRisk,
@@ -295,15 +349,6 @@ export const mockPatients: Patient[] = Array.from({ length: 26 }, (_, index) =>
 );
 
 // Alert configuration mock data
-export interface AlertRule {
-  id: string;
-  name: string;
-  riskThreshold: number;
-  sustainedDuration: number; // minutes
-  rateOfChangeThreshold: number; // percentage points per 30 min
-  enabled: boolean;
-}
-
 export interface AlertPerformanceMetrics {
   falseAlarmsPerHundredPatientDays: number;
   medianLeadTimeHours: number;

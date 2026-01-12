@@ -1,28 +1,50 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Patient } from '../data/mockData';
 import { RiskBadge } from './RiskBadge';
 import { RiskSparkline } from './RiskSparkline';
 import { Button } from './ui/button';
-import { ArrowUpDown, ArrowUp, ArrowDown, Filter } from 'lucide-react';
-import { Badge } from './ui/badge';
+import { ArrowUpDown, ArrowUp, ArrowDown, Filter, Star } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { ko } from 'date-fns/locale';
+import { HoverCard, HoverCardContent, HoverCardTrigger } from './ui/hover-card';
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 
 interface PatientListDashboardProps {
   patients: Patient[];
   onSelectPatient: (icuId: string) => void;
 }
 
-type SortField = 'bedNumber' | 'currentRisk' | 'changeInLast30Min' | 'lastDataUpdate' | 'imputedDataPercentage';
+type SortField = 'bedNumber' | 'currentRisk' | 'changeInLast30Min' | 'lastDataUpdate';
 type SortDirection = 'asc' | 'desc';
 
 export function PatientListDashboard({ patients, onSelectPatient }: PatientListDashboardProps) {
-  const formatBedLabel = (bedNumber: string) => `ICU-${bedNumber.slice(-3)}`;
+  const extractWardCode = (ward: string) => {
+    const match = ward.match(/\(([^)]+)\)/);
+    return match ? match[1] : ward;
+  };
+  const formatBedLabel = (bedNumber: string, ward: string) =>
+    `${extractWardCode(ward)}-${bedNumber.slice(-3)}`;
+  const vitalConfigs = [
+    { key: 'sbp', label: 'SBP' },
+    { key: 'dbp', label: 'DBP' },
+    { key: 'hr', label: 'PR' },
+    { key: 'rr', label: 'RR' },
+    { key: 'temp', label: 'BT' },
+    { key: 'spo2', label: 'SpO2' },
+  ];
   const [sortField, setSortField] = useState<SortField>('currentRisk');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [filterRapidIncrease, setFilterRapidIncrease] = useState(false);
   const [filterHighRisk, setFilterHighRisk] = useState(false);
   const [filterStaleData, setFilterStaleData] = useState(false);
+  const [selectedWard, setSelectedWard] = useState('전체');
+  const [favoriteOrder, setFavoriteOrder] = useState<string[]>([]);
+  const favoritesSet = useMemo(() => new Set(favoriteOrder), [favoriteOrder]);
+  const wardOptions = useMemo(() => {
+    const wards = Array.from(new Set(patients.map((patient) => patient.ward)));
+    wards.sort();
+    return ['전체', ...wards];
+  }, [patients]);
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -33,20 +55,40 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
     }
   };
 
-  const sortedAndFilteredPatients = useMemo(() => {
-    let filtered = [...patients];
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem('icu-favorite-patients');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setFavoriteOrder(parsed);
+        }
+      }
+    } catch {
+      // Ignore storage failures.
+    }
+  }, []);
 
-    if (filterRapidIncrease) {
-      filtered = filtered.filter(p => p.alertStatus === 'rapid-increase');
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('icu-favorite-patients', JSON.stringify(favoriteOrder));
+    } catch {
+      // Ignore storage failures.
     }
-    if (filterHighRisk) {
-      filtered = filtered.filter(p => p.alertStatus === 'sustained-high');
-    }
-    if (filterStaleData) {
-      filtered = filtered.filter(p => p.alertStatus === 'stale-data');
-    }
+  }, [favoriteOrder]);
 
-    filtered.sort((a, b) => {
+  const toggleFavorite = (icuId: string) => {
+    setFavoriteOrder((prev) => {
+      if (prev.includes(icuId)) {
+        return prev.filter((id) => id !== icuId);
+      }
+      return [icuId, ...prev];
+    });
+  };
+
+  const sortPatients = (items: Patient[]) => {
+    const sorted = [...items];
+    sorted.sort((a, b) => {
       let aVal: any = a[sortField];
       let bVal: any = b[sortField];
 
@@ -59,9 +101,54 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
       if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
       return 0;
     });
+    return sorted;
+  };
 
-    return filtered;
-  }, [patients, sortField, sortDirection, filterRapidIncrease, filterHighRisk, filterStaleData]);
+  const sortedAndFilteredPatients = useMemo(() => {
+    let filtered = [...patients];
+
+    if (selectedWard !== '전체') {
+      filtered = filtered.filter((patient) => patient.ward === selectedWard);
+    }
+    if (filterRapidIncrease) {
+      filtered = filtered.filter(p => p.alertStatus === 'rapid-increase');
+    }
+    if (filterHighRisk) {
+      filtered = filtered.filter(p => p.alertStatus === 'sustained-high');
+    }
+    if (filterStaleData) {
+      filtered = filtered.filter(p => p.alertStatus === 'stale-data');
+    }
+
+    const favoritePatients: Patient[] = [];
+    const nonFavoritePatients: Patient[] = [];
+
+    filtered.forEach((patient) => {
+      if (favoritesSet.has(patient.icuId)) {
+        favoritePatients.push(patient);
+      } else {
+        nonFavoritePatients.push(patient);
+      }
+    });
+
+    favoritePatients.sort((a, b) => {
+      const aIndex = favoriteOrder.indexOf(a.icuId);
+      const bIndex = favoriteOrder.indexOf(b.icuId);
+      return aIndex - bIndex;
+    });
+
+    return [...favoritePatients, ...sortPatients(nonFavoritePatients)];
+  }, [
+    patients,
+    sortField,
+    sortDirection,
+    filterRapidIncrease,
+    filterHighRisk,
+    filterStaleData,
+    selectedWard,
+    favoritesSet,
+    favoriteOrder,
+  ]);
 
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortField !== field) return <ArrowUpDown className="h-4 w-4 ml-1 opacity-30" />;
@@ -70,17 +157,42 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
       : <ArrowDown className="h-4 w-4 ml-1" />;
   };
 
+  const formatVitalValue = (value: number, unit: string) => {
+    if (unit === 'C') {
+      return value.toFixed(1);
+    }
+    return Math.round(value).toString();
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl tracking-tight">ICU 위험도 대시보드</h1>
+          <h1 className="text-3xl tracking-tight">
+            {selectedWard === '전체'
+              ? '위험도 대시보드'
+              : `${extractWardCode(selectedWard)} 위험도 대시보드`}
+          </h1>
           <p className="text-muted-foreground mt-1">실시간 사망 위험도 모니터링 · 임상 의사결정 지원</p>
         </div>
-        <div className="text-right text-sm text-muted-foreground">
-          <div>전체 환자: {patients.length}명</div>
-          <div>활성 알림: {patients.filter(p => p.alertStatus !== 'normal').length}건</div>
+        <div className="text-right text-sm text-muted-foreground space-y-2">
+          <div className="flex items-center justify-end gap-2">
+            <span className="text-xs">병동</span>
+            <select
+              value={selectedWard}
+              onChange={(event) => setSelectedWard(event.target.value)}
+              className="h-8 rounded-md border border-border bg-card px-2 text-xs text-foreground"
+            >
+              {wardOptions.map((ward) => (
+                <option key={ward} value={ward}>
+                  {ward === '전체' ? '전체' : extractWardCode(ward)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>전체 환자: {sortedAndFilteredPatients.length}명</div>
+          <div>활성 알림: {sortedAndFilteredPatients.filter(p => p.alertStatus !== 'normal').length}건</div>
         </div>
       </div>
 
@@ -130,10 +242,13 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
       {/* Patient Table */}
       <div className="rounded-lg border border-border bg-card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted">
-                <th className="px-4 py-4 text-left">
+                <th className="px-2 py-3 text-left">
+                  <span className="text-xs text-muted-foreground px-2">알림</span>
+                </th>
+                <th className="px-2 py-3 text-left">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -144,7 +259,10 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                     <SortIcon field="bedNumber" />
                   </Button>
                 </th>
-                <th className="px-4 py-4 text-left">
+                <th className="px-2 py-3 text-left">
+                  <span className="text-xs text-muted-foreground px-2">담당 병과</span>
+                </th>
+                <th className="px-2 py-3 text-left">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -155,10 +273,17 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                     <SortIcon field="currentRisk" />
                   </Button>
                 </th>
-                <th className="px-4 py-4 text-left">
-                  <span className="text-sm text-muted-foreground px-3">추이 (6시간)</span>
+                <th className="px-2 py-3 text-left">
+                  <span className="text-xs text-muted-foreground px-2">추이 (6시간)</span>
                 </th>
-                <th className="px-4 py-4 text-left">
+                {vitalConfigs.map((vital) => (
+                  <th key={vital.key} className="px-2 py-3 text-left">
+                    <span className="text-xs text-muted-foreground px-2">
+                      {vital.label}
+                    </span>
+                  </th>
+                ))}
+                <th className="px-2 py-3 text-left">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -169,7 +294,7 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                     <SortIcon field="changeInLast30Min" />
                   </Button>
                 </th>
-                <th className="px-4 py-4 text-left">
+                <th className="px-2 py-3 text-left">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -179,23 +304,6 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                     마지막 업데이트
                     <SortIcon field="lastDataUpdate" />
                   </Button>
-                </th>
-                <th className="px-4 py-4 text-left">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => toggleSort('imputedDataPercentage')}
-                    className="flex items-center hover:bg-accent"
-                  >
-                    보정값 (%)
-                    <SortIcon field="imputedDataPercentage" />
-                  </Button>
-                </th>
-                <th className="px-4 py-4 text-left">
-                  <span className="text-sm text-muted-foreground px-3">주요 기여 인자</span>
-                </th>
-                <th className="px-4 py-4 text-left">
-                  <span className="text-sm text-muted-foreground px-3">알림 상태</span>
                 </th>
               </tr>
             </thead>
@@ -209,15 +317,36 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                     onClick={() => onSelectPatient(patient.icuId)}
                     className="border-b border-border hover:bg-accent cursor-pointer transition-colors"
                   >
-                    <td className="px-4 py-4">
-                      <span className="text-lg font-mono">
-                        {formatBedLabel(patient.bedNumber)}
+                    <td className="px-2 py-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleFavorite(patient.icuId);
+                          }}
+                          className="rounded-md p-1 hover:bg-muted"
+                          aria-label={favoritesSet.has(patient.icuId) ? '즐겨찾기 해제' : '즐겨찾기'}
+                        >
+                          <Star
+                            className={`h-4 w-4 ${favoritesSet.has(patient.icuId) ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground'}`}
+                          />
+                        </button>
+                        <RiskBadge alertStatus={patient.alertStatus} />
+                      </div>
+                    </td>
+                    <td className="px-2 py-3">
+                      <span className="text-base font-mono">
+                        {formatBedLabel(patient.bedNumber, patient.ward)}
                       </span>
                     </td>
-                    <td className="px-4 py-4">
+                    <td className="px-2 py-3">
+                      <div className="text-sm whitespace-nowrap leading-tight">{patient.department}</div>
+                    </td>
+                    <td className="px-2 py-3">
                       <div className="flex items-center gap-2">
                         <span 
-                          className={`text-2xl font-mono ${
+                          className={`text-xl font-mono ${
                             patient.currentRisk >= 70 ? 'text-red-500' :
                             patient.currentRisk >= 50 ? 'text-orange-500' :
                             patient.currentRisk >= 30 ? 'text-yellow-500' :
@@ -229,13 +358,74 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                         <span className="text-muted-foreground">%</span>
                       </div>
                     </td>
-                    <td className="px-4 py-4">
-                      <RiskSparkline data={patient.riskHistory} width={120} height={40} />
+                    <td className="px-2 py-3">
+                      <RiskSparkline data={patient.riskHistory} width={90} height={36} />
                     </td>
-                    <td className="px-4 py-4">
+                    {vitalConfigs.map((vital) => {
+                      const feature = patient.features.find((item) => item.key === vital.key);
+                      const lastReading = feature?.readings[feature.readings.length - 1];
+                      if (!feature || !lastReading) {
+                        return (
+                          <td key={vital.key} className="px-2 py-3 text-muted-foreground">
+                            <div className="rounded-md border border-border px-2 py-1 text-center">
+                              —
+                            </div>
+                          </td>
+                        );
+                      }
+
+                      const chartData = feature.readings.slice(-72).map((reading) => ({
+                        time: `${reading.timestamp.getHours()}:${String(reading.timestamp.getMinutes()).padStart(2, '0')}`,
+                        value: reading.value,
+                      }));
+
+                      return (
+                        <td key={vital.key} className="px-2 py-3">
+                          <HoverCard openDelay={200}>
+                            <HoverCardTrigger asChild>
+                              <div className="rounded-md border border-border px-2 py-1 text-center font-mono cursor-help">
+                                {formatVitalValue(lastReading.value, feature.unit)}
+                              </div>
+                            </HoverCardTrigger>
+                            <HoverCardContent className="w-72">
+                              <div className="flex items-baseline justify-between">
+                                <div className="text-sm font-medium">{feature.name}</div>
+                                <div className="text-xs text-muted-foreground">{feature.unit}</div>
+                              </div>
+                              <div className="mt-2 h-24">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <LineChart data={chartData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                                    <XAxis
+                                      dataKey="time"
+                                      stroke="var(--muted-foreground)"
+                                      tick={{ fill: 'var(--muted-foreground)', fontSize: 10 }}
+                                      interval="preserveStartEnd"
+                                    />
+                                    <YAxis
+                                      stroke="var(--muted-foreground)"
+                                      tick={{ fill: 'var(--muted-foreground)', fontSize: 10 }}
+                                      domain={['auto', 'auto']}
+                                    />
+                                    <Line
+                                      type="monotone"
+                                      dataKey="value"
+                                      stroke="#3b82f6"
+                                      strokeWidth={2}
+                                      dot={false}
+                                    />
+                                  </LineChart>
+                                </ResponsiveContainer>
+                              </div>
+                            </HoverCardContent>
+                          </HoverCard>
+                        </td>
+                      );
+                    })}
+                    <td className="px-2 py-3">
                       <div className="flex items-center gap-1">
                         <span 
-                          className={`text-lg font-mono ${
+                          className={`text-base font-mono ${
                             patient.changeInLast30Min > 5 ? 'text-orange-500' :
                             patient.changeInLast30Min < -5 ? 'text-green-500' :
                             'text-muted-foreground'
@@ -246,40 +436,10 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                         <span className="text-muted-foreground text-sm">pp</span>
                       </div>
                     </td>
-                    <td className="px-4 py-4">
-                      <div className={`text-sm ${isStale ? 'text-orange-400' : 'text-muted-foreground'}`}>
+                    <td className="px-2 py-3">
+                      <div className={`text-xs ${isStale ? 'text-orange-400' : 'text-muted-foreground'}`}>
                         {formatDistanceToNow(patient.lastDataUpdate, { addSuffix: true, locale: ko })}
                       </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <span 
-                          className={`text-lg font-mono ${
-                            patient.imputedDataPercentage > 30 ? 'text-orange-500' :
-                            patient.imputedDataPercentage > 15 ? 'text-yellow-500' :
-                            'text-muted-foreground'
-                          }`}
-                        >
-                          {patient.imputedDataPercentage}
-                        </span>
-                        <span className="text-muted-foreground">%</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex gap-1.5 flex-wrap max-w-xs">
-                        {patient.topContributors.map((contributor, idx) => (
-                          <Badge 
-                            key={idx} 
-                            variant="outline"
-                            className="text-xs bg-muted border-border"
-                          >
-                            {contributor}
-                          </Badge>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <RiskBadge alertStatus={patient.alertStatus} />
                     </td>
                   </tr>
                 );

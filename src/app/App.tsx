@@ -17,6 +17,8 @@ import {
 
 type View = "dashboard" | "patient-detail" | "alert-management";
 
+const PATIENT_ALERT_RULES_KEY = "icu-patient-alert-rules";
+
 function AppContent() {
   const [currentView, setCurrentView] =
     useState<View>("dashboard");
@@ -29,6 +31,24 @@ function AppContent() {
   const [alertRules, setAlertRules] = useState<AlertRule[]>(
     mockAlertRules
   );
+  const [patientAlertRulesMap, setPatientAlertRulesMap] = useState<
+    Record<string, AlertRule[]>
+  >(() => {
+    if (typeof window === "undefined") {
+      return {};
+    }
+    try {
+      const stored = window.localStorage.getItem(
+        PATIENT_ALERT_RULES_KEY
+      );
+      if (!stored) {
+        return {};
+      }
+      return JSON.parse(stored) as Record<string, AlertRule[]>;
+    } catch {
+      return {};
+    }
+  });
   const [liveStatus, setLiveStatus] = useState<
     "idle" | "live" | "error"
   >("idle");
@@ -44,54 +64,91 @@ function AppContent() {
     setSelectedPatientId(null);
   };
 
-  useEffect(() => {
-    let isMounted = true;
+  const persistPatientAlertRules = (
+    nextMap: Record<string, AlertRule[]>
+  ) => {
+    try {
+      window.localStorage.setItem(
+        PATIENT_ALERT_RULES_KEY,
+        JSON.stringify(nextMap)
+      );
+    } catch {
+      // Ignore storage failures (e.g., private mode).
+    }
+  };
 
-    const computeAlertStatus = (
-      patient: Patient,
-      rules: AlertRule[]
-    ): Patient["alertStatus"] => {
-      const now = Date.now();
-      const lastUpdateMs = patient.lastDataUpdate.getTime();
-      if (now - lastUpdateMs > 20 * 60 * 1000) {
-        return "stale-data";
+  const computeAlertStatus = (
+    patient: Patient,
+    rules: AlertRule[]
+  ): Patient["alertStatus"] => {
+    const now = Date.now();
+    const lastUpdateMs = patient.lastDataUpdate.getTime();
+    if (now - lastUpdateMs > 20 * 60 * 1000) {
+      return "stale-data";
+    }
+
+    const rulesToUse = patient.alertRules ?? rules;
+    let rapidRuleTriggered = false;
+    let sustainedRuleTriggered = false;
+
+    rulesToUse.forEach((rule) => {
+      if (!rule.enabled) return;
+      if (rule.rateOfChangeThreshold > 0) {
+        const change = patient.changeInLast30Min;
+        if (
+          patient.currentRisk >= rule.riskThreshold &&
+          change >= rule.rateOfChangeThreshold
+        ) {
+          rapidRuleTriggered = true;
+        }
       }
 
-      let rapidRuleTriggered = false;
-      let sustainedRuleTriggered = false;
-
-      rules.forEach((rule) => {
-        if (!rule.enabled) return;
-        if (rule.rateOfChangeThreshold > 0) {
-          const change = patient.changeInLast30Min;
-          if (
-            patient.currentRisk >= rule.riskThreshold &&
-            change >= rule.rateOfChangeThreshold
-          ) {
-            rapidRuleTriggered = true;
-          }
+      if (rule.sustainedDuration > 0) {
+        const windowStart = now - rule.sustainedDuration * 60 * 1000;
+        const windowPoints = patient.riskHistory.filter(
+          (point) => point.timestamp.getTime() >= windowStart
+        );
+        if (
+          windowPoints.length > 0 &&
+          windowPoints.every(
+            (point) => point.risk >= rule.riskThreshold
+          )
+        ) {
+          sustainedRuleTriggered = true;
         }
+      }
+    });
 
-        if (rule.sustainedDuration > 0) {
-          const windowStart = now - rule.sustainedDuration * 60 * 1000;
-          const windowPoints = patient.riskHistory.filter(
-            (point) => point.timestamp.getTime() >= windowStart
-          );
-          if (
-            windowPoints.length > 0 &&
-            windowPoints.every(
-              (point) => point.risk >= rule.riskThreshold
-            )
-          ) {
-            sustainedRuleTriggered = true;
-          }
+    if (rapidRuleTriggered) return "rapid-increase";
+    if (sustainedRuleTriggered) return "sustained-high";
+    return "normal";
+  };
+
+  const handleUpdatePatientAlertRules = (
+    icuId: string,
+    rules: AlertRule[]
+  ) => {
+    setPatientAlertRulesMap((prev) => {
+      const next = { ...prev, [icuId]: rules };
+      persistPatientAlertRules(next);
+      return next;
+    });
+    setPatients((prev) =>
+      prev.map((patient) => {
+        if (patient.icuId !== icuId) {
+          return patient;
         }
-      });
+        const updated = { ...patient, alertRules: rules };
+        return {
+          ...updated,
+          alertStatus: computeAlertStatus(updated, alertRules),
+        };
+      })
+    );
+  };
 
-      if (rapidRuleTriggered) return "rapid-increase";
-      if (sustainedRuleTriggered) return "sustained-high";
-      return "normal";
-    };
+  useEffect(() => {
+    let isMounted = true;
 
     const revivePatients = (payload: Patient[]) =>
       payload.map((patient) => {
@@ -132,6 +189,7 @@ function AppContent() {
           ...revived,
           currentRisk: lastRisk,
           changeInLast30Min,
+          alertRules: patientAlertRulesMap[patient.icuId],
         };
 
         return {
@@ -167,7 +225,7 @@ function AppContent() {
       isMounted = false;
       window.clearInterval(interval);
     };
-  }, [alertRules]);
+  }, [alertRules, patientAlertRulesMap]);
 
   const selectedPatient = selectedPatientId
     ? patients.find(
@@ -267,7 +325,7 @@ function AppContent() {
       </div>
 
       {/* Main Content */}
-      <div className="container mx-auto px-6 py-8">
+      <div className="mx-auto w-full max-w-[1600px] px-4 py-6">
         {currentView === "dashboard" && (
           <PatientListDashboard
             patients={patients}
@@ -279,6 +337,15 @@ function AppContent() {
           selectedPatient && (
             <PatientDetailView
               patient={selectedPatient}
+              alertRules={
+                selectedPatient.alertRules ?? alertRules
+              }
+              onUpdateAlertRules={(rules) =>
+                handleUpdatePatientAlertRules(
+                  selectedPatient.icuId,
+                  rules
+                )
+              }
               onBack={handleBackToDashboard}
             />
           )}

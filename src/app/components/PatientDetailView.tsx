@@ -1,18 +1,35 @@
-import { Patient } from '../data/mockData';
+import { AlertRule, Patient } from '../data/mockData';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Area, AreaChart, BarChart, Bar, Cell } from 'recharts';
 import { Button } from './ui/button';
 import { ArrowLeft, AlertTriangle, Circle } from 'lucide-react';
 import { RiskBadge } from './RiskBadge';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Switch } from './ui/switch';
 
 interface PatientDetailViewProps {
   patient: Patient;
+  alertRules: AlertRule[];
+  onUpdateAlertRules: (rules: AlertRule[]) => void;
   onBack: () => void;
 }
 
-export function PatientDetailView({ patient, onBack }: PatientDetailViewProps) {
+export function PatientDetailView({
+  patient,
+  alertRules,
+  onUpdateAlertRules,
+  onBack,
+}: PatientDetailViewProps) {
   const formatBedLabel = (bedNumber: string) => `ICU-${bedNumber.slice(-3)}`;
+  const updateRule = (id: string, updates: Partial<AlertRule>) => {
+    onUpdateAlertRules(
+      alertRules.map((rule) =>
+        rule.id === id ? { ...rule, ...updates } : rule
+      )
+    );
+  };
   // Prepare risk data for chart
   const riskChartData = patient.riskHistory.map(point => ({
     time: format(point.timestamp, 'HH:mm'),
@@ -35,6 +52,28 @@ export function PatientDetailView({ patient, onBack }: PatientDetailViewProps) {
       contribution: feature.contribution,
     }));
 
+  const sortedFeatures = [...patient.features].sort((a, b) => {
+    const lastA = a.readings[a.readings.length - 1];
+    const prevA = a.readings[a.readings.length - 2];
+    const lastB = b.readings[b.readings.length - 1];
+    const prevB = b.readings[b.readings.length - 2];
+
+    const rateA =
+      lastA && prevA && prevA.value !== 0
+        ? Math.abs((lastA.value - prevA.value) / prevA.value)
+        : lastA && prevA
+        ? Math.abs(lastA.value - prevA.value)
+        : -1;
+    const rateB =
+      lastB && prevB && prevB.value !== 0
+        ? Math.abs((lastB.value - prevB.value) / prevB.value)
+        : lastB && prevB
+        ? Math.abs(lastB.value - prevB.value)
+        : -1;
+
+    return rateB - rateA;
+  });
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -52,6 +91,9 @@ export function PatientDetailView({ patient, onBack }: PatientDetailViewProps) {
             <p className="text-muted-foreground mt-1">환자 상세 정보</p>
             <p className="text-xs text-muted-foreground">
               {patient.age}세 · {patient.sex}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {patient.ward} · {patient.department}
             </p>
           </div>
         </div>
@@ -133,9 +175,24 @@ export function PatientDetailView({ patient, onBack }: PatientDetailViewProps) {
       {/* Two Column Layout */}
       <div className="grid grid-cols-3 gap-6">
         {/* Vital Signs - Left Column (2/3) */}
-        <div className="col-span-2 space-y-6">
+        <div className="col-span-2 space-y-6 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto lg:pr-3">
           <h2 className="text-xl">활력징후 및 검사 수치</h2>
-          {patient.features.map((feature, idx) => {
+          {sortedFeatures.map((feature, idx) => {
+            if (feature.readings.length === 0) {
+              return (
+                <div key={idx} className="rounded-lg border border-border bg-card p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="text-lg">{feature.name}</h3>
+                      <div className="text-sm text-muted-foreground mt-1">
+                        데이터 없음
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
             const chartData = feature.readings.slice(-72).map(reading => ({
               time: format(reading.timestamp, 'HH:mm'),
               value: reading.value,
@@ -259,6 +316,108 @@ export function PatientDetailView({ patient, onBack }: PatientDetailViewProps) {
         {/* Feature Contributions - Right Column (1/3) */}
         <div className="col-span-1">
           <div className="sticky top-6 space-y-6">
+            <div className="rounded-lg border border-border bg-card p-5">
+              <h2 className="text-xl mb-4">환자별 알림 설정</h2>
+              <p className="text-sm text-muted-foreground mb-4">
+                이 환자에 한해 알림 임계값과 변동 기준을 조정합니다.
+              </p>
+              <div className="space-y-4">
+                {alertRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    className="rounded-md border border-border bg-muted p-4"
+                  >
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="text-sm font-medium">{rule.name}</div>
+                      <div className="flex items-center gap-2">
+                        <Label
+                          htmlFor={`patient-rule-${rule.id}`}
+                          className="text-xs text-muted-foreground"
+                        >
+                          활성화
+                        </Label>
+                        <Switch
+                          id={`patient-rule-${rule.id}`}
+                          checked={rule.enabled}
+                          onCheckedChange={(checked) =>
+                            updateRule(rule.id, { enabled: checked })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <Label
+                          htmlFor={`patient-threshold-${rule.id}`}
+                          className="text-xs text-muted-foreground"
+                        >
+                          위험도 (%)
+                        </Label>
+                        <Input
+                          id={`patient-threshold-${rule.id}`}
+                          type="number"
+                          value={rule.riskThreshold}
+                          onChange={(e) =>
+                            updateRule(rule.id, {
+                              riskThreshold: Number(e.target.value),
+                            })
+                          }
+                          className="mt-1 bg-card border-border"
+                          min={0}
+                          max={100}
+                        />
+                      </div>
+                      <div>
+                        <Label
+                          htmlFor={`patient-duration-${rule.id}`}
+                          className="text-xs text-muted-foreground"
+                        >
+                          지속 (분)
+                        </Label>
+                        <Input
+                          id={`patient-duration-${rule.id}`}
+                          type="number"
+                          value={rule.sustainedDuration}
+                          onChange={(e) =>
+                            updateRule(rule.id, {
+                              sustainedDuration: Number(e.target.value),
+                            })
+                          }
+                          className="mt-1 bg-card border-border"
+                          min={0}
+                        />
+                      </div>
+                      <div>
+                        <Label
+                          htmlFor={`patient-rate-${rule.id}`}
+                          className="text-xs text-muted-foreground"
+                        >
+                          변화율 (pp/30분)
+                        </Label>
+                        <Input
+                          id={`patient-rate-${rule.id}`}
+                          type="number"
+                          value={rule.rateOfChangeThreshold}
+                          onChange={(e) =>
+                            updateRule(rule.id, {
+                              rateOfChangeThreshold: Number(
+                                e.target.value
+                              ),
+                            })
+                          }
+                          className="mt-1 bg-card border-border"
+                          min={0}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 text-xs text-muted-foreground">
+                변경사항은 이 환자의 알림 판단에 즉시 반영됩니다.
+              </div>
+            </div>
+
             <div className="rounded-lg border border-border bg-card p-5">
               <h2 className="text-xl mb-4">인자별 기여도</h2>
               <p className="text-sm text-muted-foreground mb-4">

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from typing import List, Tuple
+from datetime import datetime, timedelta, timezone
+import os
+import random
+from typing import Dict, List, Tuple
 
 from fastapi import FastAPI
 
@@ -18,398 +20,82 @@ def clamp(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(max_value, value))
 
 
-def seeded_random(seed: int) -> float:
-    import math
-
-    value = math.sin(seed * 9999) * 10000
-    return value - math.floor(value)
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-def random_between(min_value: float, max_value: float) -> float:
-    import random
-
-    return min_value + random.random() * (max_value - min_value)
+def isoformat_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 FEATURE_TEMPLATES = [
-    {
-        "key": "pco2",
-        "name": "pCO2 (Blood Gas)",
-        "unit": "mmHg",
-        "normal_range": (35, 45),
-        "base_value": 42,
-        "variance": 8,
-        "min": 20,
-        "max": 70,
-        "round": 1,
-    },
-    {
-        "key": "po2",
-        "name": "pO2 (Blood Gas)",
-        "unit": "mmHg",
-        "normal_range": (80, 100),
-        "base_value": 92,
-        "variance": 20,
-        "min": 50,
-        "max": 140,
-        "round": 1,
-    },
-    {
-        "key": "alt",
-        "name": "ALT",
-        "unit": "U/L",
-        "normal_range": (7, 56),
-        "base_value": 38,
-        "variance": 30,
-        "min": 5,
-        "max": 200,
-        "round": 0,
-    },
-    {
-        "key": "albumin",
-        "name": "Albumin",
-        "unit": "g/dL",
-        "normal_range": (3.5, 5.0),
-        "base_value": 3.2,
-        "variance": 0.8,
-        "min": 1.8,
-        "max": 5.5,
-        "round": 2,
-    },
-    {
-        "key": "alp",
-        "name": "Alkaline Phosphatase",
-        "unit": "U/L",
-        "normal_range": (44, 147),
-        "base_value": 110,
-        "variance": 60,
-        "min": 30,
-        "max": 300,
-        "round": 0,
-    },
-    {
-        "key": "ast",
-        "name": "AST",
-        "unit": "U/L",
-        "normal_range": (10, 40),
-        "base_value": 46,
-        "variance": 30,
-        "min": 5,
-        "max": 200,
-        "round": 0,
-    },
-    {
-        "key": "bicarb",
-        "name": "Bicarbonate",
-        "unit": "mEq/L",
-        "normal_range": (22, 29),
-        "base_value": 24,
-        "variance": 6,
-        "min": 12,
-        "max": 36,
-        "round": 1,
-    },
-    {
-        "key": "bili",
-        "name": "Bilirubin, Total",
-        "unit": "mg/dL",
-        "normal_range": (0.1, 1.2),
-        "base_value": 1.1,
-        "variance": 1.0,
-        "min": 0,
-        "max": 5,
-        "round": 2,
-    },
-    {
-        "key": "calcium",
-        "name": "Calcium",
-        "unit": "mg/dL",
-        "normal_range": (8.6, 10.2),
-        "base_value": 9.1,
-        "variance": 1.2,
-        "min": 6.5,
-        "max": 12,
-        "round": 2,
-    },
-    {
-        "key": "chloride",
-        "name": "Chloride",
-        "unit": "mEq/L",
-        "normal_range": (98, 106),
-        "base_value": 102,
-        "variance": 6,
-        "min": 85,
-        "max": 120,
-        "round": 0,
-    },
-    {
-        "key": "creatinine",
-        "name": "Creatinine",
-        "unit": "mg/dL",
-        "normal_range": (0.6, 1.3),
-        "base_value": 1.4,
-        "variance": 0.6,
-        "min": 0.3,
-        "max": 4,
-        "round": 2,
-    },
-    {
-        "key": "glucose",
-        "name": "Glucose",
-        "unit": "mg/dL",
-        "normal_range": (70, 140),
-        "base_value": 130,
-        "variance": 50,
-        "min": 50,
-        "max": 300,
-        "round": 0,
-    },
-    {
-        "key": "potassium",
-        "name": "Potassium",
-        "unit": "mEq/L",
-        "normal_range": (3.5, 5.1),
-        "base_value": 4.4,
-        "variance": 1.1,
-        "min": 2.5,
-        "max": 6.5,
-        "round": 2,
-    },
-    {
-        "key": "protein",
-        "name": "Protein, Total",
-        "unit": "g/dL",
-        "normal_range": (6.0, 8.3),
-        "base_value": 6.6,
-        "variance": 1.2,
-        "min": 4.0,
-        "max": 9.5,
-        "round": 2,
-    },
-    {
-        "key": "sodium",
-        "name": "Sodium",
-        "unit": "mEq/L",
-        "normal_range": (135, 145),
-        "base_value": 138,
-        "variance": 8,
-        "min": 120,
-        "max": 160,
-        "round": 0,
-    },
-    {
-        "key": "bun",
-        "name": "Urea Nitrogen (BUN)",
-        "unit": "mg/dL",
-        "normal_range": (7, 20),
-        "base_value": 24,
-        "variance": 12,
-        "min": 3,
-        "max": 60,
-        "round": 0,
-    },
-    {
-        "key": "hematocrit",
-        "name": "Hematocrit",
-        "unit": "%",
-        "normal_range": (36, 50),
-        "base_value": 38,
-        "variance": 10,
-        "min": 20,
-        "max": 60,
-        "round": 1,
-    },
-    {
-        "key": "hemoglobin",
-        "name": "Hemoglobin",
-        "unit": "g/dL",
-        "normal_range": (12, 17),
-        "base_value": 12.5,
-        "variance": 3,
-        "min": 7,
-        "max": 20,
-        "round": 1,
-    },
-    {
-        "key": "inr",
-        "name": "INR (PT)",
-        "unit": "",
-        "normal_range": (0.8, 1.2),
-        "base_value": 1.3,
-        "variance": 0.6,
-        "min": 0.6,
-        "max": 4,
-        "round": 2,
-    },
-    {
-        "key": "platelet",
-        "name": "Platelet Count",
-        "unit": "x10^9/L",
-        "normal_range": (150, 400),
-        "base_value": 170,
-        "variance": 90,
-        "min": 30,
-        "max": 600,
-        "round": 0,
-    },
-    {
-        "key": "rbc",
-        "name": "Red Blood Cells (RBC)",
-        "unit": "x10^12/L",
-        "normal_range": (4.2, 5.9),
-        "base_value": 4.6,
-        "variance": 1.0,
-        "min": 2.5,
-        "max": 7,
-        "round": 2,
-    },
-    {
-        "key": "wbc",
-        "name": "WBC Count",
-        "unit": "x10^9/L",
-        "normal_range": (4, 11),
-        "base_value": 12,
-        "variance": 6,
-        "min": 1,
-        "max": 30,
-        "round": 1,
-    },
-    {
-        "key": "hr",
-        "name": "Heart rate",
-        "unit": "/min",
-        "normal_range": (60, 100),
-        "base_value": 96,
-        "variance": 20,
-        "min": 40,
-        "max": 160,
-        "round": 0,
-    },
-    {
-        "key": "sbp",
-        "name": "SBP",
-        "unit": "mmHg",
-        "normal_range": (90, 120),
-        "base_value": 102,
-        "variance": 20,
-        "min": 70,
-        "max": 180,
-        "round": 0,
-    },
-    {
-        "key": "dbp",
-        "name": "DBP",
-        "unit": "mmHg",
-        "normal_range": (60, 80),
-        "base_value": 66,
-        "variance": 14,
-        "min": 40,
-        "max": 110,
-        "round": 0,
-    },
-    {
-        "key": "rr",
-        "name": "Respiratory rate",
-        "unit": "/min",
-        "normal_range": (12, 20),
-        "base_value": 20,
-        "variance": 8,
-        "min": 8,
-        "max": 40,
-        "round": 0,
-    },
-    {
-        "key": "spo2",
-        "name": "SpO2",
-        "unit": "%",
-        "normal_range": (95, 100),
-        "base_value": 95,
-        "variance": 6,
-        "min": 80,
-        "max": 100,
-        "round": 0,
-    },
-    {
-        "key": "gcs_eye",
-        "name": "GCS – eye",
-        "unit": "score",
-        "normal_range": (3, 4),
-        "base_value": 3.6,
-        "variance": 1,
-        "min": 1,
-        "max": 4,
-        "round": 0,
-        "discrete": True,
-    },
-    {
-        "key": "temp",
-        "name": "Body temperature",
-        "unit": "C",
-        "normal_range": (36.5, 37.5),
-        "base_value": 37.2,
-        "variance": 1.2,
-        "min": 35,
-        "max": 40,
-        "round": 1,
-    },
-    {
-        "key": "fio2",
-        "name": "Inspired O2 fraction (FiO2)",
-        "unit": "fraction",
-        "normal_range": (0.21, 0.6),
-        "base_value": 0.35,
-        "variance": 0.25,
-        "min": 0.21,
-        "max": 1.0,
-        "round": 2,
-    },
-    {
-        "key": "gcs_verbal",
-        "name": "GCS – verbal",
-        "unit": "score",
-        "normal_range": (4, 5),
-        "base_value": 4.3,
-        "variance": 1,
-        "min": 1,
-        "max": 5,
-        "round": 0,
-        "discrete": True,
-    },
-    {
-        "key": "gcs_motor",
-        "name": "GCS – motor",
-        "unit": "score",
-        "normal_range": (5, 6),
-        "base_value": 5.4,
-        "variance": 1,
-        "min": 1,
-        "max": 6,
-        "round": 0,
-        "discrete": True,
-    },
-    {
-        "key": "delta_vital_hr",
-        "name": "delta_vital_hr",
-        "unit": "hr",
-        "normal_range": (0, 4),
-        "base_value": 1.4,
-        "variance": 2.5,
-        "min": 0,
-        "max": 12,
-        "round": 1,
-    },
-    {
-        "key": "delta_lab_hr",
-        "name": "delta_lab_hr",
-        "unit": "hr",
-        "normal_range": (0, 12),
-        "base_value": 4.5,
-        "variance": 6,
-        "min": 0,
-        "max": 24,
-        "round": 1,
-    },
+    {"key": "pco2", "name": "pCO2 (Blood Gas)", "unit": "mmHg", "normal_range": (35, 45), "base_value": 40, "variance": 4, "min": 25, "max": 60, "round": 1},
+    {"key": "po2", "name": "pO2 (Blood Gas)", "unit": "mmHg", "normal_range": (80, 100), "base_value": 92, "variance": 10, "min": 60, "max": 140, "round": 1},
+    {"key": "alt", "name": "ALT", "unit": "U/L", "normal_range": (7, 56), "base_value": 28, "variance": 12, "min": 5, "max": 120, "round": 0},
+    {"key": "albumin", "name": "Albumin", "unit": "g/dL", "normal_range": (3.5, 5.0), "base_value": 3.8, "variance": 0.3, "min": 2.5, "max": 5.5, "round": 2},
+    {"key": "alp", "name": "Alkaline Phosphatase", "unit": "U/L", "normal_range": (44, 147), "base_value": 100, "variance": 20, "min": 30, "max": 220, "round": 0},
+    {"key": "ast", "name": "AST", "unit": "U/L", "normal_range": (10, 40), "base_value": 30, "variance": 10, "min": 8, "max": 120, "round": 0},
+    {"key": "bicarb", "name": "Bicarbonate", "unit": "mEq/L", "normal_range": (22, 29), "base_value": 24, "variance": 2.5, "min": 15, "max": 34, "round": 1},
+    {"key": "bili", "name": "Bilirubin, Total", "unit": "mg/dL", "normal_range": (0.1, 1.2), "base_value": 0.8, "variance": 0.3, "min": 0, "max": 3.5, "round": 2},
+    {"key": "calcium", "name": "Calcium", "unit": "mg/dL", "normal_range": (8.6, 10.2), "base_value": 9.3, "variance": 0.4, "min": 7.2, "max": 11.5, "round": 2},
+    {"key": "chloride", "name": "Chloride", "unit": "mEq/L", "normal_range": (98, 106), "base_value": 102, "variance": 3.5, "min": 88, "max": 118, "round": 0},
+    {"key": "creatinine", "name": "Creatinine", "unit": "mg/dL", "normal_range": (0.6, 1.3), "base_value": 1.0, "variance": 0.3, "min": 0.3, "max": 2.8, "round": 2},
+    {"key": "glucose", "name": "Glucose", "unit": "mg/dL", "normal_range": (70, 140), "base_value": 110, "variance": 20, "min": 60, "max": 220, "round": 0},
+    {"key": "potassium", "name": "Potassium", "unit": "mEq/L", "normal_range": (3.5, 5.1), "base_value": 4.2, "variance": 0.4, "min": 2.8, "max": 6.2, "round": 2},
+    {"key": "protein", "name": "Protein, Total", "unit": "g/dL", "normal_range": (6.0, 8.3), "base_value": 6.9, "variance": 0.4, "min": 4.8, "max": 9.2, "round": 2},
+    {"key": "sodium", "name": "Sodium", "unit": "mEq/L", "normal_range": (135, 145), "base_value": 138, "variance": 3, "min": 125, "max": 155, "round": 0},
+    {"key": "bun", "name": "Urea Nitrogen (BUN)", "unit": "mg/dL", "normal_range": (7, 20), "base_value": 16, "variance": 4, "min": 4, "max": 40, "round": 0},
+    {"key": "hematocrit", "name": "Hematocrit", "unit": "%", "normal_range": (36, 50), "base_value": 41, "variance": 3.5, "min": 25, "max": 55, "round": 1},
+    {"key": "hemoglobin", "name": "Hemoglobin", "unit": "g/dL", "normal_range": (12, 17), "base_value": 13.5, "variance": 1.0, "min": 8, "max": 19, "round": 1},
+    {"key": "inr", "name": "INR (PT)", "unit": "", "normal_range": (0.8, 1.2), "base_value": 1.0, "variance": 0.2, "min": 0.6, "max": 2.5, "round": 2},
+    {"key": "platelet", "name": "Platelet Count", "unit": "x10^9/L", "normal_range": (150, 400), "base_value": 230, "variance": 40, "min": 80, "max": 500, "round": 0},
+    {"key": "rbc", "name": "Red Blood Cells (RBC)", "unit": "x10^12/L", "normal_range": (4.2, 5.9), "base_value": 4.8, "variance": 0.4, "min": 3.0, "max": 6.5, "round": 2},
+    {"key": "wbc", "name": "WBC Count", "unit": "x10^9/L", "normal_range": (4, 11), "base_value": 7.2, "variance": 2.0, "min": 2, "max": 18, "round": 1},
+    {"key": "hr", "name": "Heart rate", "unit": "/min", "normal_range": (60, 100), "base_value": 85, "variance": 10, "min": 45, "max": 140, "round": 0},
+    {"key": "sbp", "name": "SBP", "unit": "mmHg", "normal_range": (90, 120), "base_value": 112, "variance": 10, "min": 80, "max": 160, "round": 0},
+    {"key": "dbp", "name": "DBP", "unit": "mmHg", "normal_range": (60, 80), "base_value": 72, "variance": 8, "min": 45, "max": 110, "round": 0},
+    {"key": "rr", "name": "Respiratory rate", "unit": "/min", "normal_range": (12, 20), "base_value": 16, "variance": 3, "min": 8, "max": 30, "round": 0},
+    {"key": "spo2", "name": "SpO2", "unit": "%", "normal_range": (95, 100), "base_value": 97, "variance": 2, "min": 88, "max": 100, "round": 0},
+    {"key": "gcs_eye", "name": "GCS – eye", "unit": "score", "normal_range": (3, 4), "base_value": 4, "variance": 0, "min": 1, "max": 4, "round": 0, "discrete": True},
+    {"key": "temp", "name": "Body temperature", "unit": "C", "normal_range": (36.5, 37.5), "base_value": 36.8, "variance": 0.3, "min": 35, "max": 40, "round": 1},
+    {"key": "fio2", "name": "Inspired O2 fraction (FiO2)", "unit": "fraction", "normal_range": (0.21, 0.6), "base_value": 0.3, "variance": 0.05, "min": 0.21, "max": 0.8, "round": 2},
+    {"key": "gcs_verbal", "name": "GCS – verbal", "unit": "score", "normal_range": (4, 5), "base_value": 5, "variance": 0, "min": 1, "max": 5, "round": 0, "discrete": True},
+    {"key": "gcs_motor", "name": "GCS – motor", "unit": "score", "normal_range": (5, 6), "base_value": 6, "variance": 0, "min": 1, "max": 6, "round": 0, "discrete": True},
 ]
+
+WARDS = [
+    "Intensive Care Unit (ICU)",
+    "Medical Intensive Care Unit (MICU)",
+    "Cardiac Vascular Intensive Care Unit (CVICU)",
+    "Medical/Surgical Intensive Care Unit (MICU/SICU)",
+    "Surgical Intensive Care Unit (SICU)",
+    "Trauma SICU (TSICU)",
+    "Coronary Care Unit (CCU)",
+    "Neuro Surgical Intensive Care Unit (Neuro SICU)",
+]
+
+DEPARTMENTS = [
+    "감염내과",
+    "호흡기내과",
+    "순환기내과",
+    "호흡기내과",
+    "혈액종양내과",
+    "외과",
+    "흉부외과",
+    "노인내과",
+    "신장내과",
+    "흉부외과",
+    "산부인과",
+    "흉부외과",
+    "산부인과",
+    "노인내과",
+    "흉부외과",
+    "노인내과",
+]
+
+def seeded_random(seed: int) -> float:
+    value = random.Random(seed).random()
+    return value - 0.5
 
 ALERT_PROFILES = [
     {
@@ -451,8 +137,44 @@ ALERT_PROFILES = [
 ]
 
 
-FEATURE_ORDER = [template["key"] for template in FEATURE_TEMPLATES]
+MODEL_FEATURE_MAP = {
+    "pco2": "feature3",
+    "po2": "feature4",
+    "alt": "feature5",
+    "albumin": "feature6",
+    "alp": "feature7",
+    "ast": "feature8",
+    "bicarb": "feature9",
+    "bili": "feature10",
+    "calcium": "feature11",
+    "chloride": "feature12",
+    "creatinine": "feature13",
+    "glucose": "feature14",
+    "potassium": "feature15",
+    "protein": "feature16",
+    "sodium": "feature17",
+    "bun": "feature18",
+    "hematocrit": "feature19",
+    "hemoglobin": "feature20",
+    "inr": "feature21",
+    "platelet": "feature22",
+    "rbc": "feature23",
+    "wbc": "feature24",
+    "hr": "feature25",
+    "sbp": "feature26",
+    "dbp": "feature27",
+    "rr": "feature28",
+    "spo2": "feature29",
+    "gcs_eye": "feature30",
+    "temp": "feature31",
+    "fio2": "feature32",
+    "gcs_verbal": "feature33",
+    "gcs_motor": "feature34",
+}
+
+FEATURE_ORDER = [f"feature{i}" for i in range(1, 37)]
 MODEL = ModelAdapter(FEATURE_ORDER)
+MODEL_SEQ_LEN = int(os.getenv("MODEL_SEQ_LEN", "12"))
 
 
 def compute_contribution(value: float, normal_range: Tuple[float, float]) -> float:
@@ -478,24 +200,22 @@ def build_contributor_label(
     return name
 
 
-def build_reading(template: dict) -> dict:
-    import random
+def random_between(min_value: float, max_value: float) -> float:
+    return min_value + random.random() * (max_value - min_value)
 
+
+def build_reading(template: dict) -> dict:
     value = template["base_value"] + (random.random() - 0.5) * template["variance"]
     if template.get("discrete"):
         value = round(value)
-    if "min" in template:
-        value = max(template["min"], value)
-    if "max" in template:
-        value = min(template["max"], value)
+    value = clamp(value, template["min"], template["max"])
     round_to = template.get("round")
     if isinstance(round_to, int):
         value = round(value, round_to)
-
     return {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": isoformat_utc(now_utc()),
         "value": value,
-        "isImputed": random.random() < 0.12,
+        "isImputed": False,
     }
 
 
@@ -504,39 +224,34 @@ def build_readings_history(template: dict, base_time: datetime) -> List[dict]:
     for i in range(HISTORY_POINTS - 1, -1, -1):
         timestamp = base_time - timedelta(minutes=i * INTERVAL_MINUTES)
         reading = build_reading(template)
-        reading["timestamp"] = timestamp.isoformat()
+        reading["timestamp"] = isoformat_utc(timestamp)
         readings.append(reading)
     return readings
 
 
-def build_risk_history(
-    current_risk: int, trend: str, base_time: datetime
-) -> List[dict]:
+def build_risk_history(current_risk: int, trend: str, base_time: datetime) -> List[dict]:
     history: List[dict] = []
     for i in range(HISTORY_POINTS - 1, -1, -1):
         timestamp = base_time - timedelta(minutes=i * INTERVAL_MINUTES)
         if trend == "increasing":
-            risk = current_risk - (i / 12) * 3 + random_between(-2.5, 2.5)
+            risk = current_risk - (i / 12) * 2.0 + random_between(-2.0, 2.0)
         elif trend == "decreasing":
-            risk = current_risk + (i / 12) * 3 + random_between(-2.5, 2.5)
+            risk = current_risk + (i / 12) * 2.0 + random_between(-2.0, 2.0)
         else:
-            risk = current_risk + random_between(-2, 2)
-        history.append({"timestamp": timestamp.isoformat(), "risk": int(clamp(risk, 0, 100))})
+            risk = current_risk + random_between(-1.5, 1.5)
+        history.append({"timestamp": isoformat_utc(timestamp), "risk": int(clamp(risk, 0, 100))})
     return history
 
 
 def build_features(profile_index: int) -> List[dict]:
-    risk_bias = [1.15, 1.0, 1.25, 0.95, 1.1, 1.05][profile_index % 6]
     base_time = datetime.utcnow()
     features: List[dict] = []
-    for idx, template in enumerate(FEATURE_TEMPLATES):
-        bias = 1 + ((idx % 3) - 1) * 0.04
-        base_value = template["base_value"] * (risk_bias if idx % 5 == 0 else bias)
-        temp = {**template, "base_value": base_value}
-        readings = build_readings_history(temp, base_time)
-        contribution = (random_between(-0.45, 0.55)) * 40
+    for template in FEATURE_TEMPLATES:
+        readings = build_readings_history(template, base_time)
+        contribution = (random.random() - 0.5) * 18
         features.append(
             {
+                "key": template["key"],
                 "name": template["name"],
                 "unit": template["unit"],
                 "readings": readings,
@@ -547,14 +262,49 @@ def build_features(profile_index: int) -> List[dict]:
     return features
 
 
+def build_model_row(patient: dict, reading_index: int | None = None) -> Dict[str, float]:
+    row = {f"feature{i}": 0.0 for i in range(1, 37)}
+    row["feature1"] = float(patient.get("age", 0))
+    row["feature2"] = 1.0 if patient.get("sex") == "M" else 0.0
+
+    for feature in patient.get("features", []):
+        column = MODEL_FEATURE_MAP.get(feature.get("key"))
+        if not column:
+            continue
+        readings = feature.get("readings", [])
+        if not readings:
+            continue
+        if reading_index is not None:
+            if abs(reading_index) > len(readings):
+                continue
+            reading = readings[reading_index]
+        else:
+            reading = readings[-1]
+        row[column] = float(reading.get("value", 0.0))
+
+    return row
+
+
+def build_model_history(patient: dict) -> List[Dict[str, float]]:
+    if MODEL_SEQ_LEN <= 0:
+        return []
+    history: List[Dict[str, float]] = []
+    for idx in range(-MODEL_SEQ_LEN, 0):
+        history.append(build_model_row(patient, idx))
+    return history
+
+
 def refresh_contributions(patient: dict) -> None:
-    feature_values = {
-        template["key"]: patient["features"][idx]["readings"][-1]["value"]
-        for idx, template in enumerate(FEATURE_TEMPLATES)
-    }
+    feature_values: Dict[str, float] = {}
+    for idx, template in enumerate(FEATURE_TEMPLATES):
+        readings = patient["features"][idx]["readings"]
+        feature_values[template["key"]] = readings[-1]["value"] if readings else 0.0
     model_output = MODEL.explain(feature_values)
 
     for idx, feature in enumerate(patient["features"]):
+        if not feature["readings"]:
+            feature["contribution"] = 0.0
+            continue
         latest = feature["readings"][-1]
         if model_output.contributions:
             key = FEATURE_TEMPLATES[idx]["key"]
@@ -570,8 +320,9 @@ def refresh_contributions(patient: dict) -> None:
             )
         feature["contribution"] = round(contribution, 1)
 
+    available_features = [f for f in patient["features"] if f["readings"]]
     sorted_features = sorted(
-        patient["features"], key=lambda item: item["contribution"], reverse=True
+        available_features, key=lambda item: item["contribution"], reverse=True
     )
     positive = [f for f in sorted_features if f["contribution"] > 0]
     top_features = positive if positive else sorted_features
@@ -592,65 +343,82 @@ def create_patient(index: int) -> dict:
     profile = ALERT_PROFILES[index % len(ALERT_PROFILES)]
     stay_id = 30000000 + index * 17 + 25
     bed_number = f"MIMIC4-ICU-{stay_id}"
-    base_time = datetime.utcnow()
-    risk_jitter = (seeded_random(index + 1) - 0.5) * 22
+    ward = WARDS[index % len(WARDS)]
+    department = DEPARTMENTS[index % len(DEPARTMENTS)]
+    base_time = now_utc()
+    risk_jitter = seeded_random(index + 1) * 10
     current_risk = int(clamp(profile["current_risk"] + risk_jitter, 5, 98))
-    age = int(clamp(22 + seeded_random(index + 7) * 68, 18, 90))
-    sex = "M" if seeded_random(index + 11) > 0.48 else "F"
+    age = int(clamp(30 + (seeded_random(index + 7) + 0.5) * 55, 18, 90))
+    sex = "M" if seeded_random(index + 11) > 0 else "F"
+    features = build_features(index)
     patient = {
         "icuId": str(stay_id),
         "bedNumber": bed_number,
+        "ward": ward,
+        "department": department,
         "age": age,
         "sex": sex,
         "currentRisk": current_risk,
         "riskHistory": build_risk_history(current_risk, profile["trend"], base_time),
         "changeInLast30Min": 0,
-        "lastDataUpdate": base_time.isoformat(),
-        "imputedDataPercentage": int(random_between(5, 35)),
+        "lastDataUpdate": isoformat_utc(base_time),
+        "imputedDataPercentage": 0,
         "topContributors": profile["top_contributors"],
         "alertStatus": profile["alert_status"],
-        "features": build_features(index),
+        "features": features,
     }
+    patient["_model_history"] = build_model_history(patient)
+    if patient["_model_history"]:
+        prediction = MODEL.predict(patient["_model_history"])
+        if prediction.risk is not None:
+            patient["currentRisk"] = int(clamp(prediction.risk, 0, 100))
+            if patient["riskHistory"]:
+                patient["riskHistory"][-1]["risk"] = patient["currentRisk"]
     refresh_contributions(patient)
     return patient
 
 
-PATIENTS = [create_patient(index) for index in range(26)]
+PATIENTS = [create_patient(index) for index in range(len(WARDS) * 13)]
 
 
 def update_patient(patient: dict) -> None:
-    history = patient["riskHistory"]
-    last_risk = history[-1]["risk"] if history else 50
-    next_risk = int(clamp(last_risk + random_between(-4, 4), 0, 100))
-    now = datetime.utcnow()
-
-    history.append({"timestamp": now.isoformat(), "risk": next_risk})
-    if len(history) > HISTORY_POINTS:
-        history.pop(0)
-
-    feature_values = {
-        template["key"]: patient["features"][idx]["readings"][-1]["value"]
-        for idx, template in enumerate(FEATURE_TEMPLATES)
-    }
-    prediction = MODEL.predict(feature_values)
-    if prediction.risk is not None:
-        patient["currentRisk"] = int(clamp(prediction.risk, 0, 100))
-    else:
-        patient["currentRisk"] = next_risk
-    patient["lastDataUpdate"] = now.isoformat()
-    patient["imputedDataPercentage"] = int(
-        clamp(patient["imputedDataPercentage"] + random_between(-5, 5), 2, 55)
-    )
+    risk_history = patient["riskHistory"]
+    last_risk = risk_history[-1]["risk"] if risk_history else patient["currentRisk"]
+    now = now_utc()
 
     for feature, template in zip(patient["features"], FEATURE_TEMPLATES):
         reading = build_reading(template)
+        reading["timestamp"] = isoformat_utc(now)
         feature["readings"].append(reading)
         if len(feature["readings"]) > HISTORY_POINTS:
             feature["readings"].pop(0)
 
-    thirty_min_index = max(len(history) - 7, 0)
-    past_risk = history[thirty_min_index]["risk"] if history else next_risk
-    patient["changeInLast30Min"] = int(next_risk - past_risk)
+    model_history = patient.get("_model_history")
+    if model_history is None:
+        model_history = []
+        patient["_model_history"] = model_history
+    model_history.append(build_model_row(patient))
+    if MODEL_SEQ_LEN > 0 and len(model_history) > MODEL_SEQ_LEN:
+        model_history.pop(0)
+
+    prediction = MODEL.predict(model_history)
+    risk_next = (
+        int(clamp(prediction.risk, 0, 100))
+        if prediction.risk is not None
+        else int(clamp(last_risk + random_between(-4, 4), 0, 100))
+    )
+
+    risk_history.append({"timestamp": isoformat_utc(now), "risk": risk_next})
+    if len(risk_history) > HISTORY_POINTS:
+        risk_history.pop(0)
+
+    patient["currentRisk"] = risk_next
+    patient["lastDataUpdate"] = isoformat_utc(now)
+    patient["imputedDataPercentage"] = 0
+
+    thirty_min_index = max(len(risk_history) - 7, 0)
+    past_risk = risk_history[thirty_min_index]["risk"] if risk_history else risk_next
+    patient["changeInLast30Min"] = int(risk_next - past_risk)
     refresh_contributions(patient)
 
 

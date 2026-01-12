@@ -261,7 +261,7 @@ export function AlertManagement({ onBack, rules, onUpdateRules }: AlertManagemen
       <div className="rounded-lg border border-border bg-muted p-4">
         <div className="text-sm text-muted-foreground">
           <strong>참고:</strong> 알림 규칙은 5분마다 평가됩니다. 임계값 변경사항은 저장 즉시 적용됩니다. 
-          과거 성능 지표는 최근 30일 기준으로 계산됩니다. 병동별 또는 근무조별 설정은 시스템 관리자에게 문의하세요.
+          과거 성능 지표는 최근 30일 기준으로 계산됩니다. 환자별 알림 설정은 환자 상세 화면에서 조정합니다.
         </div>
       </div>
     </div>
