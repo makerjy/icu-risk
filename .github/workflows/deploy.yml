@@ -24,7 +24,7 @@ jobs:
       - run: npm ci
       - run: npm run build:gh
         env:
-          VITE_BASE: "/ICU_RISK/"
+          VITE_BASE: "/icu-risk/"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
