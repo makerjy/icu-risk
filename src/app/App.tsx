@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PatientListDashboard } from "./components/PatientListDashboard";
 import { PatientDetailView } from "./components/PatientDetailView";
 import { AlertManagement } from "./components/AlertManagement";
@@ -17,8 +17,6 @@ import {
 
 type View = "dashboard" | "patient-detail" | "alert-management";
 
-const PATIENT_ALERT_RULES_KEY = "icu-patient-alert-rules";
-
 function AppContent() {
   const [currentView, setCurrentView] =
     useState<View>("dashboard");
@@ -33,25 +31,14 @@ function AppContent() {
   );
   const [patientAlertRulesMap, setPatientAlertRulesMap] = useState<
     Record<string, AlertRule[]>
-  >(() => {
-    if (typeof window === "undefined") {
-      return {};
-    }
-    try {
-      const stored = window.localStorage.getItem(
-        PATIENT_ALERT_RULES_KEY
-      );
-      if (!stored) {
-        return {};
-      }
-      return JSON.parse(stored) as Record<string, AlertRule[]>;
-    } catch {
-      return {};
-    }
-  });
+  >({});
   const [liveStatus, setLiveStatus] = useState<
     "idle" | "live" | "error"
   >("idle");
+  const lastAlertStatusRef = useRef<
+    Record<string, Patient["alertStatus"]>
+  >({});
+  const hasAlertSnapshotRef = useRef(false);
   const { theme, toggleTheme } = useTheme();
 
   const handleSelectPatient = (icuId: string) => {
@@ -64,18 +51,13 @@ function AppContent() {
     setSelectedPatientId(null);
   };
 
-  const persistPatientAlertRules = (
-    nextMap: Record<string, AlertRule[]>
-  ) => {
-    try {
-      window.localStorage.setItem(
-        PATIENT_ALERT_RULES_KEY,
-        JSON.stringify(nextMap)
-      );
-    } catch {
-      // Ignore storage failures (e.g., private mode).
-    }
+  const extractWardCode = (ward: string) => {
+    const match = ward.match(/\(([^)]+)\)/);
+    return match ? match[1] : ward;
   };
+
+  const formatBedLabel = (bedNumber: string, ward: string) =>
+    `${extractWardCode(ward)}-${bedNumber.slice(-3)}`;
 
   const computeAlertStatus = (
     patient: Patient,
@@ -130,7 +112,6 @@ function AppContent() {
   ) => {
     setPatientAlertRulesMap((prev) => {
       const next = { ...prev, [icuId]: rules };
-      persistPatientAlertRules(next);
       return next;
     });
     setPatients((prev) =>
@@ -145,6 +126,86 @@ function AppContent() {
         };
       })
     );
+    void persistPatientAlertRules(icuId, rules);
+  };
+
+  useEffect(() => {
+    let isActive = true;
+
+    const fetchPatientAlertRules = async () => {
+      try {
+        const response = await fetch("/api/patient-alert-rules", {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const data = (await response.json()) as Record<
+          string,
+          AlertRule[]
+        >;
+        if (isActive) {
+          setPatientAlertRulesMap(data);
+        }
+      } catch {
+        // Keep local defaults if backend is unavailable.
+      }
+    };
+
+    fetchPatientAlertRules();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  const persistPatientAlertRules = async (
+    icuId: string,
+    rules: AlertRule[]
+  ) => {
+    try {
+      await fetch(`/api/patient-alert-rules/${icuId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ rules }),
+      });
+    } catch {
+      // Ignore persistence failures for now.
+    }
+  };
+
+  const statusToRuleName = (status: Patient["alertStatus"]) => {
+    if (status === "rapid-increase") return "급격한 증가";
+    if (status === "sustained-high") return "지속적 고위험";
+    if (status === "stale-data") return "데이터 지연";
+    return "정상";
+  };
+
+  const postAlertLog = async (
+    patient: Patient,
+    status: Patient["alertStatus"]
+  ) => {
+    if (status === "normal") return;
+    try {
+      await fetch("/api/alert-logs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          patientId: patient.icuId,
+          bedNumber: formatBedLabel(patient.bedNumber, patient.ward),
+          ward: patient.ward,
+          ruleName: statusToRuleName(status),
+          status: status,
+          riskAtTrigger: patient.currentRisk,
+        }),
+      });
+    } catch {
+      // Avoid blocking UI if logging fails.
+    }
   };
 
   useEffect(() => {
@@ -198,6 +259,36 @@ function AppContent() {
         };
       });
 
+    const logAlertTransitions = (nextPatients: Patient[]) => {
+      if (!hasAlertSnapshotRef.current) {
+        nextPatients.forEach((patient) => {
+          lastAlertStatusRef.current[patient.icuId] =
+            patient.alertStatus;
+        });
+        hasAlertSnapshotRef.current = true;
+        return;
+      }
+
+      const nextLogs: Promise<void>[] = [];
+      nextPatients.forEach((patient) => {
+        const previous =
+          lastAlertStatusRef.current[patient.icuId];
+        if (previous !== patient.alertStatus) {
+          lastAlertStatusRef.current[patient.icuId] =
+            patient.alertStatus;
+          if (patient.alertStatus !== "normal") {
+            nextLogs.push(
+              postAlertLog(patient, patient.alertStatus)
+            );
+          }
+        }
+      });
+
+      if (nextLogs.length > 0) {
+        void Promise.all(nextLogs);
+      }
+    };
+
     const fetchPatients = async () => {
       try {
         const response = await fetch("/api/patients", {
@@ -208,7 +299,9 @@ function AppContent() {
         }
         const data = (await response.json()) as Patient[];
         if (isMounted) {
-          setPatients(revivePatients(data));
+          const revived = revivePatients(data);
+          logAlertTransitions(revived);
+          setPatients(revived);
           setLiveStatus("live");
         }
       } catch (error) {

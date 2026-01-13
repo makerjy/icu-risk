@@ -1,4 +1,5 @@
-import { AlertRule, AlertPerformanceMetrics, AlertLogEntry, mockAlertPerformance, mockAlertLog } from '../data/mockData';
+import { useEffect, useState } from 'react';
+import { AlertRule, AlertPerformanceMetrics, AlertLogEntry, mockAlertPerformance } from '../data/mockData';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Switch } from './ui/switch';
@@ -16,7 +17,56 @@ interface AlertManagementProps {
 
 export function AlertManagement({ onBack, rules, onUpdateRules }: AlertManagementProps) {
   const performance: AlertPerformanceMetrics = mockAlertPerformance;
-  const alertLog: AlertLogEntry[] = mockAlertLog;
+  const [alertLog, setAlertLog] = useState<AlertLogEntry[]>([]);
+  const [logStatus, setLogStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+
+  useEffect(() => {
+    let isActive = true;
+
+    const fetchAlertLogs = async () => {
+      setLogStatus('loading');
+      try {
+        const response = await fetch('/api/alert-logs?limit=200', { cache: 'no-store' });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const data = (await response.json()) as Array<{
+          id: string;
+          timestamp: string;
+          bedNumber: string;
+          ruleName: string;
+          riskAtTrigger: number;
+          status: string;
+          acknowledgedBy?: string | null;
+          acknowledgedAt?: string | null;
+        }>;
+        if (isActive) {
+          const revived = data.map((entry) => ({
+            id: entry.id,
+            timestamp: new Date(entry.timestamp),
+            bedNumber: entry.bedNumber,
+            ruleName: entry.ruleName,
+            riskAtTrigger: entry.riskAtTrigger,
+            acknowledged: entry.status === 'acknowledged',
+            acknowledgedBy: entry.acknowledgedBy ?? undefined,
+            acknowledgedAt: entry.acknowledgedAt ? new Date(entry.acknowledgedAt) : undefined,
+          }));
+          setAlertLog(revived);
+          setLogStatus('idle');
+        }
+      } catch {
+        if (isActive) {
+          setLogStatus('error');
+        }
+      }
+    };
+
+    fetchAlertLogs();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   const updateRule = (id: string, updates: Partial<AlertRule>) => {
     onUpdateRules(
@@ -189,6 +239,11 @@ export function AlertManagement({ onBack, rules, onUpdateRules }: AlertManagemen
       {/* Alert Audit Log */}
       <div className="rounded-lg border border-border bg-card p-6">
         <h2 className="text-xl mb-4">알림 기록</h2>
+        {logStatus === 'error' && (
+          <div className="mb-3 text-sm text-destructive">
+            알림 로그를 불러오지 못했습니다.
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>

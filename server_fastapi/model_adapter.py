@@ -3,18 +3,13 @@ from __future__ import annotations
 import os
 import pickle
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
-try:  # torch is optional for non-model mode
-    import torch
-except Exception:  # pragma: no cover - allow server to run without torch
-    torch = None  # type: ignore[assignment]
+import torch
+import joblib
 
-try:
-    import joblib
-except Exception:  # pragma: no cover - allow fallback to pickle
-    joblib = None  # type: ignore[assignment]
+from .model_impl import CONFIG, LSTMModel, TSB_eICU
 
 
 @dataclass
@@ -28,20 +23,23 @@ class ModelOutput:
 class ModelAdapter:
     def __init__(self, feature_order: List[str]) -> None:
         self._feature_order = feature_order
-        self._model = None
-        self._torch_model = None
         self._scaler = None
         self._gen_model = None
+        self._pre_model = None
         self._model_loaded = False
         self._message = "stub"
 
         model_path = os.getenv(
             "MODEL_PATH",
-            os.path.join(os.path.dirname(__file__), "..", "model", "RealMIP_Pre.pth"),
+            os.path.join(
+                os.path.dirname(__file__), "..", "model", "RealMIP_Pre.pth"
+            ),
         )
         gen_path = os.getenv(
             "MODEL_GEN_PATH",
-            os.path.join(os.path.dirname(__file__), "..", "model", "RealMIP_Gen.pth"),
+            os.path.join(
+                os.path.dirname(__file__), "..", "model", "RealMIP_Gen.pth"
+            ),
         )
         scaler_path = os.getenv(
             "MODEL_SCALER_PATH",
@@ -50,156 +48,93 @@ class ModelAdapter:
 
         if scaler_path and os.path.exists(scaler_path):
             try:
-                if joblib:
-                    self._scaler = joblib.load(scaler_path)
-                else:
+                self._scaler = joblib.load(scaler_path)
+            except Exception as exc:
+                try:
                     with open(scaler_path, "rb") as handle:
                         self._scaler = pickle.load(handle)
-            except Exception as exc:  # pragma: no cover - demo fallback
-                self._scaler = None
-                self._message = f"scaler_load_failed:{exc}"
+                except Exception as inner_exc:
+                    self._scaler = None
+                    self._message = f"scaler_load_failed:{inner_exc or exc}"
 
-        if model_path and os.path.exists(model_path):
-            if torch is None:
-                self._message = "torch_missing"
-            else:
-                try:
-                    self._torch_model = torch.jit.load(
-                        model_path, map_location="cpu"
-                    )
-                    self._torch_model.eval()
-                    self._model_loaded = True
-                    self._message = f"loaded_jit:{model_path}"
-                except Exception:
-                    try:
-                        loaded = torch.load(model_path, map_location="cpu")
-                        if isinstance(loaded, torch.nn.Module):
-                            self._torch_model = loaded
-                            self._torch_model.eval()
-                            self._model_loaded = True
-                            self._message = f"loaded_nn:{model_path}"
-                        else:
-                            self._model = loaded
-                            self._model_loaded = True
-                            self._message = f"loaded_obj:{model_path}"
-                    except Exception as exc:  # pragma: no cover - demo fallback
-                        self._model_loaded = False
-                        self._message = f"load_failed:{exc}"
-
-        if gen_path and os.path.exists(gen_path) and torch is not None:
-            try:
-                self._gen_model = torch.jit.load(gen_path, map_location="cpu")
-                self._gen_model.eval()
-            except Exception:
-                try:
-                    loaded = torch.load(gen_path, map_location="cpu")
-                    if isinstance(loaded, torch.nn.Module):
-                        self._gen_model = loaded
-                        self._gen_model.eval()
-                except Exception:
-                    self._gen_model = None
+        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        try:
+            self._gen_model = TSB_eICU(36, CONFIG, self._device).to(self._device)
+            self._pre_model = LSTMModel(36).to(self._device)
+            self._gen_model.load_state_dict(torch.load(gen_path, map_location=self._device))
+            self._pre_model.load_state_dict(torch.load(model_path, map_location=self._device))
+            self._gen_model.eval()
+            self._pre_model.eval()
+            self._model_loaded = True
+            self._message = f"loaded_state_dict:{model_path}"
+        except Exception as exc:
+            self._model_loaded = False
+            self._message = f"load_failed:{exc}"
 
     @property
     def status(self) -> str:
         return self._message
 
-    def _vector_from_row(self, row: Dict[str, Union[str, float]]) -> List[float]:
+    def _vector_from_row(self, row: Dict[str, float]) -> List[float]:
         values = []
         for name in self._feature_order:
-            raw = row.get(name, 0.0)
-            if raw in ("", None):
-                values.append(float("nan"))
-                continue
-            try:
-                values.append(float(raw))
-            except Exception:
-                values.append(float("nan"))
+            raw = row.get(name, float("nan"))
+            values.append(float(raw))
         return values
 
-    def _prepare_input(self, features: Union[Dict[str, float], Sequence[Dict[str, Union[str, float]]]]) -> np.ndarray:
-        if isinstance(features, dict):
-            array = np.array([self._vector_from_row(features)], dtype=np.float32)
-        else:
-            sequence = [self._vector_from_row(row) for row in features]
-            array = np.array(sequence, dtype=np.float32)
-
-        nan_mask = np.isnan(array)
-        if self._gen_model is not None and torch is not None and nan_mask.any():
-            try:
-                tensor = torch.tensor(np.nan_to_num(array, nan=0.0), dtype=torch.float32)
-                if tensor.ndim == 2:
-                    tensor = tensor.unsqueeze(0)
-                with torch.no_grad():
-                    generated = self._gen_model(tensor)
-                if isinstance(generated, (tuple, list)):
-                    generated = generated[0]
-                gen_np = generated.squeeze().detach().cpu().numpy()
-                if gen_np.shape == array.shape:
-                    array = np.where(nan_mask, gen_np, array)
-            except Exception:
-                pass
-
+    def _prepare_sequence(self, features: Sequence[Sequence[float]]) -> tuple[np.ndarray, np.ndarray]:
+        if not features:
+            empty = np.zeros((1, len(self._feature_order)), dtype=np.float32)
+            return empty, np.zeros_like(empty, dtype=np.float32)
+        array = np.array(features, dtype=np.float32)
+        mask = (~np.isnan(array)).astype(np.float32)
         array = np.nan_to_num(array, nan=0.0)
         if self._scaler is not None and hasattr(self._scaler, "transform"):
-            try:
-                array = self._scaler.transform(array)
-            except Exception:
-                pass
-        return array
+            array = self._scaler.transform(array)
+        return array, mask
 
-    def predict(self, features: Union[Dict[str, float], Sequence[Dict[str, Union[str, float]]]]) -> ModelOutput:
-        array = self._prepare_input(features)
+    def _build_batch(self, features: Sequence[Sequence[float]]) -> Dict[str, torch.Tensor]:
+        array, obs_mask = self._prepare_sequence(features)
+        observed = torch.tensor(array, dtype=torch.float32).unsqueeze(0)
+        mask = torch.tensor(obs_mask, dtype=torch.float32).unsqueeze(0)
+        seq_len = torch.tensor([array.shape[0]], dtype=torch.long)
+        return {
+            "patient_id": torch.tensor([0]),
+            "observed_data": observed,
+            "observed_mask": mask,
+            "gt_mask": mask.clone(),
+            "status": torch.tensor([0]),
+            "seq_length": seq_len,
+        }
 
-        if self._torch_model is not None and torch is not None:
-            try:
-                tensor = torch.tensor(array, dtype=torch.float32)
-                if tensor.ndim == 2:
-                    tensor = tensor.unsqueeze(0)
-                with torch.no_grad():
-                    output = self._torch_model(tensor)
-                if isinstance(output, (tuple, list)):
-                    output = output[0]
-                value = output.squeeze().detach().cpu().numpy()
-                risk_value = float(value) if np.isscalar(value) else float(value[-1])
-                risk = risk_value * 100 if risk_value <= 1 else risk_value
-                return ModelOutput(
-                    risk=risk,
-                    contributions=None,
-                    model_loaded=True,
-                    message=self._message,
-                )
-            except Exception as exc:  # pragma: no cover - demo fallback
-                return ModelOutput(
-                    risk=None,
-                    contributions=None,
-                    model_loaded=True,
-                    message=f"predict_failed:{exc}",
-                )
+    def predict(self, features: Sequence[Sequence[float]]) -> ModelOutput:
+        if not self._model_loaded or self._gen_model is None or self._pre_model is None:
+            return ModelOutput(
+                risk=None,
+                contributions=None,
+                model_loaded=False,
+                message=self._message,
+            )
 
-        if self._model_loaded and hasattr(self._model, "predict"):
-            try:
-                prediction = self._model.predict(array)[0]
-                risk = float(prediction) * 100 if prediction <= 1 else float(prediction)
-                return ModelOutput(
-                    risk=risk,
-                    contributions=None,
-                    model_loaded=True,
-                    message=self._message,
-                )
-            except Exception as exc:  # pragma: no cover - demo fallback
-                return ModelOutput(
-                    risk=None,
-                    contributions=None,
-                    model_loaded=True,
-                    message=f"predict_failed:{exc}",
-                )
-
-        return ModelOutput(
-            risk=None,
-            contributions=None,
-            model_loaded=False,
-            message=self._message,
-        )
+        try:
+            batch = self._build_batch(features)
+            with torch.no_grad():
+                _, imputed, _, _, _, _, seq_len = self._gen_model(batch, is_train=0)
+                output = self._pre_model(imputed, seq_len)
+                risk_prob = torch.softmax(output, dim=1)[:, 1].item()
+            return ModelOutput(
+                risk=risk_prob * 100,
+                contributions=None,
+                model_loaded=True,
+                message=self._message,
+            )
+        except Exception as exc:
+            return ModelOutput(
+                risk=None,
+                contributions=None,
+                model_loaded=True,
+                message=f"predict_failed:{exc}",
+            )
 
     def explain(self, features: Dict[str, float]) -> ModelOutput:
         # TODO: replace with SHAP/IG/attention outputs once model is available.

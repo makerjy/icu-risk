@@ -6,6 +6,9 @@ import random
 from typing import Dict, List, Tuple
 
 from fastapi import FastAPI
+from pydantic import BaseModel
+import psycopg2
+import psycopg2.extras
 
 from .model_adapter import ModelAdapter
 
@@ -14,6 +17,100 @@ HISTORY_HOURS = 6
 HISTORY_POINTS = int(HISTORY_HOURS * (60 / INTERVAL_MINUTES) + 1)
 
 app = FastAPI(title="ICU Demo API", version="0.1.0")
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql://icu:icu@localhost:5432/icu_risk"
+)
+_db_conn = None
+
+
+def get_db_conn():
+    global _db_conn
+    if _db_conn is None or _db_conn.closed:
+        _db_conn = psycopg2.connect(DATABASE_URL)
+        _db_conn.autocommit = True
+    return _db_conn
+
+
+def db_fetch_all(query: str, params: tuple | None = None):
+    conn = get_db_conn()
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(query, params or ())
+        return cur.fetchall()
+
+
+def db_execute(query: str, params: tuple | None = None):
+    conn = get_db_conn()
+    with conn.cursor() as cur:
+        cur.execute(query, params or ())
+
+
+def ensure_tables():
+    db_execute(
+        """
+        CREATE TABLE IF NOT EXISTS patient_alert_rules (
+            patient_id TEXT NOT NULL,
+            rule_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            risk_threshold INTEGER NOT NULL,
+            sustained_duration INTEGER NOT NULL,
+            rate_of_change_threshold INTEGER NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (patient_id, rule_id)
+        );
+        """
+    )
+    db_execute(
+        """
+        CREATE TABLE IF NOT EXISTS favorites (
+            patient_id TEXT PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """
+    )
+    db_execute(
+        """
+        CREATE TABLE IF NOT EXISTS alert_logs (
+            id BIGSERIAL PRIMARY KEY,
+            patient_id TEXT NOT NULL,
+            bed_number TEXT,
+            ward TEXT,
+            rule_name TEXT,
+            status TEXT,
+            risk_at_trigger INTEGER,
+            triggered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            acknowledged_by TEXT,
+            acknowledged_at TIMESTAMPTZ
+        );
+        """
+    )
+
+
+class AlertRulePayload(BaseModel):
+    id: str
+    name: str
+    riskThreshold: int
+    sustainedDuration: int
+    rateOfChangeThreshold: int
+    enabled: bool
+
+
+class PatientRulesPayload(BaseModel):
+    rules: List[AlertRulePayload]
+
+
+class FavoritePayload(BaseModel):
+    favorite: bool
+
+
+class AlertLogPayload(BaseModel):
+    patientId: str
+    bedNumber: str | None = None
+    ward: str | None = None
+    ruleName: str | None = None
+    status: str | None = None
+    riskAtTrigger: int | None = None
 
 
 def clamp(value: float, min_value: float, max_value: float) -> float:
@@ -26,6 +123,10 @@ def now_utc() -> datetime:
 
 def isoformat_utc(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def parse_iso_utc(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 FEATURE_TEMPLATES = [
@@ -137,44 +238,45 @@ ALERT_PROFILES = [
 ]
 
 
-MODEL_FEATURE_MAP = {
-    "pco2": "feature3",
-    "po2": "feature4",
-    "alt": "feature5",
-    "albumin": "feature6",
-    "alp": "feature7",
-    "ast": "feature8",
-    "bicarb": "feature9",
-    "bili": "feature10",
-    "calcium": "feature11",
-    "chloride": "feature12",
-    "creatinine": "feature13",
-    "glucose": "feature14",
-    "potassium": "feature15",
-    "protein": "feature16",
-    "sodium": "feature17",
-    "bun": "feature18",
-    "hematocrit": "feature19",
-    "hemoglobin": "feature20",
-    "inr": "feature21",
-    "platelet": "feature22",
-    "rbc": "feature23",
-    "wbc": "feature24",
-    "hr": "feature25",
-    "sbp": "feature26",
-    "dbp": "feature27",
-    "rr": "feature28",
-    "spo2": "feature29",
-    "gcs_eye": "feature30",
-    "temp": "feature31",
-    "fio2": "feature32",
-    "gcs_verbal": "feature33",
-    "gcs_motor": "feature34",
-}
-
 FEATURE_ORDER = [f"feature{i}" for i in range(1, 37)]
 MODEL = ModelAdapter(FEATURE_ORDER)
 MODEL_SEQ_LEN = int(os.getenv("MODEL_SEQ_LEN", "12"))
+MODEL_INTERVAL_MINUTES = int(os.getenv("MODEL_INTERVAL_MINUTES", "5"))
+
+MODEL_COLUMN_INDEX = {
+    "pco2": 3,
+    "po2": 4,
+    "alt": 5,
+    "albumin": 6,
+    "alp": 7,
+    "ast": 8,
+    "bicarb": 9,
+    "bili": 10,
+    "calcium": 11,
+    "chloride": 12,
+    "creatinine": 13,
+    "glucose": 14,
+    "potassium": 15,
+    "protein": 16,
+    "sodium": 17,
+    "bun": 18,
+    "hematocrit": 19,
+    "hemoglobin": 20,
+    "inr": 21,
+    "platelet": 22,
+    "rbc": 23,
+    "wbc": 24,
+    "hr": 25,
+    "sbp": 26,
+    "dbp": 27,
+    "rr": 28,
+    "spo2": 29,
+    "gcs_eye": 30,
+    "temp": 31,
+    "fio2": 32,
+    "gcs_verbal": 33,
+    "gcs_motor": 34,
+}
 
 
 def compute_contribution(value: float, normal_range: Tuple[float, float]) -> float:
@@ -244,7 +346,7 @@ def build_risk_history(current_risk: int, trend: str, base_time: datetime) -> Li
 
 
 def build_features(profile_index: int) -> List[dict]:
-    base_time = datetime.utcnow()
+    base_time = now_utc()
     features: List[dict] = []
     for template in FEATURE_TEMPLATES:
         readings = build_readings_history(template, base_time)
@@ -262,36 +364,52 @@ def build_features(profile_index: int) -> List[dict]:
     return features
 
 
-def build_model_row(patient: dict, reading_index: int | None = None) -> Dict[str, float]:
-    row = {f"feature{i}": 0.0 for i in range(1, 37)}
-    row["feature1"] = float(patient.get("age", 0))
-    row["feature2"] = 1.0 if patient.get("sex") == "M" else 0.0
-
-    for feature in patient.get("features", []):
-        column = MODEL_FEATURE_MAP.get(feature.get("key"))
-        if not column:
-            continue
-        readings = feature.get("readings", [])
-        if not readings:
-            continue
-        if reading_index is not None:
-            if abs(reading_index) > len(readings):
-                continue
-            reading = readings[reading_index]
-        else:
-            reading = readings[-1]
-        row[column] = float(reading.get("value", 0.0))
-
-    return row
-
-
-def build_model_history(patient: dict) -> List[Dict[str, float]]:
-    if MODEL_SEQ_LEN <= 0:
+def build_model_sequence(patient: dict) -> List[List[float]]:
+    features = patient.get("features", [])
+    if not features:
         return []
-    history: List[Dict[str, float]] = []
-    for idx in range(-MODEL_SEQ_LEN, 0):
-        history.append(build_model_row(patient, idx))
-    return history
+
+    seq_length = max(MODEL_SEQ_LEN, 1)
+    interval = timedelta(minutes=MODEL_INTERVAL_MINUTES)
+    end_time = now_utc()
+    timeline = [
+        end_time - interval * (seq_length - 1 - idx)
+        for idx in range(seq_length)
+    ]
+
+    feature_readings: Dict[str, List[tuple[datetime, float]]] = {}
+    for feature in features:
+        key = feature.get("key")
+        if not key:
+            continue
+        readings = []
+        for reading in feature.get("readings", []):
+            timestamp = parse_iso_utc(reading["timestamp"])
+            readings.append((timestamp, float(reading.get("value", float("nan")))))
+        readings.sort(key=lambda item: item[0])
+        feature_readings[key] = readings
+
+    sequence: List[List[float]] = []
+    sex_value = 1.0 if patient.get("sex") == "M" else 0.0
+    age_value = float(patient.get("age", 0))
+
+    for target_time in timeline:
+        row = [float("nan")] * 36
+        row[0] = age_value
+        row[1] = sex_value
+        for key, readings in feature_readings.items():
+            index = MODEL_COLUMN_INDEX.get(key)
+            if not index or not readings:
+                continue
+            value = float("nan")
+            for ts, val in reversed(readings):
+                if ts <= target_time:
+                    value = val
+                    break
+            row[index - 1] = value
+        sequence.append(row)
+
+    return sequence
 
 
 def refresh_contributions(patient: dict) -> None:
@@ -367,9 +485,9 @@ def create_patient(index: int) -> dict:
         "alertStatus": profile["alert_status"],
         "features": features,
     }
-    patient["_model_history"] = build_model_history(patient)
-    if patient["_model_history"]:
-        prediction = MODEL.predict(patient["_model_history"])
+    model_sequence = build_model_sequence(patient)
+    if model_sequence:
+        prediction = MODEL.predict(model_sequence)
         if prediction.risk is not None:
             patient["currentRisk"] = int(clamp(prediction.risk, 0, 100))
             if patient["riskHistory"]:
@@ -393,15 +511,8 @@ def update_patient(patient: dict) -> None:
         if len(feature["readings"]) > HISTORY_POINTS:
             feature["readings"].pop(0)
 
-    model_history = patient.get("_model_history")
-    if model_history is None:
-        model_history = []
-        patient["_model_history"] = model_history
-    model_history.append(build_model_row(patient))
-    if MODEL_SEQ_LEN > 0 and len(model_history) > MODEL_SEQ_LEN:
-        model_history.pop(0)
-
-    prediction = MODEL.predict(model_history)
+    model_sequence = build_model_sequence(patient)
+    prediction = MODEL.predict(model_sequence) if model_sequence else MODEL.predict([])
     risk_next = (
         int(clamp(prediction.risk, 0, 100))
         if prediction.risk is not None
@@ -425,6 +536,8 @@ def update_patient(patient: dict) -> None:
 @app.on_event("startup")
 async def start_updater() -> None:
     import asyncio
+
+    ensure_tables()
 
     async def loop() -> None:
         while True:
@@ -451,6 +564,123 @@ def get_patient(icu_id: str) -> dict:
 @app.get("/api/status")
 def get_status() -> dict:
     return {"model": MODEL.status}
+
+
+@app.get("/api/patient-alert-rules")
+def get_patient_alert_rules() -> dict:
+    rows = db_fetch_all(
+        """
+        SELECT patient_id, rule_id, name, risk_threshold, sustained_duration,
+               rate_of_change_threshold, enabled
+        FROM patient_alert_rules
+        """
+    )
+    rules_by_patient: Dict[str, List[dict]] = {}
+    for row in rows:
+        rules_by_patient.setdefault(row["patient_id"], []).append(
+            {
+                "id": row["rule_id"],
+                "name": row["name"],
+                "riskThreshold": row["risk_threshold"],
+                "sustainedDuration": row["sustained_duration"],
+                "rateOfChangeThreshold": row["rate_of_change_threshold"],
+                "enabled": row["enabled"],
+            }
+        )
+    return rules_by_patient
+
+
+@app.put("/api/patient-alert-rules/{icu_id}")
+def upsert_patient_alert_rules(
+    icu_id: str, payload: PatientRulesPayload
+) -> dict:
+    db_execute("DELETE FROM patient_alert_rules WHERE patient_id = %s", (icu_id,))
+    for rule in payload.rules:
+        db_execute(
+            """
+            INSERT INTO patient_alert_rules (
+                patient_id, rule_id, name, risk_threshold, sustained_duration,
+                rate_of_change_threshold, enabled
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                icu_id,
+                rule.id,
+                rule.name,
+                rule.riskThreshold,
+                rule.sustainedDuration,
+                rule.rateOfChangeThreshold,
+                rule.enabled,
+            ),
+        )
+    return {"status": "ok"}
+
+
+@app.get("/api/favorites")
+def get_favorites() -> List[str]:
+    rows = db_fetch_all("SELECT patient_id FROM favorites")
+    return [row["patient_id"] for row in rows]
+
+
+@app.post("/api/favorites/{icu_id}")
+def toggle_favorite(icu_id: str, payload: FavoritePayload) -> dict:
+    if payload.favorite:
+        db_execute(
+            "INSERT INTO favorites (patient_id) VALUES (%s) ON CONFLICT DO NOTHING",
+            (icu_id,),
+        )
+    else:
+        db_execute("DELETE FROM favorites WHERE patient_id = %s", (icu_id,))
+    return {"status": "ok"}
+
+
+@app.get("/api/alert-logs")
+def get_alert_logs(limit: int = 100) -> List[dict]:
+    rows = db_fetch_all(
+        """
+        SELECT id, patient_id, bed_number, ward, rule_name, status,
+               risk_at_trigger, triggered_at, acknowledged_by, acknowledged_at
+        FROM alert_logs
+        ORDER BY triggered_at DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    return [
+        {
+            "id": row["id"],
+            "patientId": row["patient_id"],
+            "bedNumber": row["bed_number"],
+            "ward": row["ward"],
+            "ruleName": row["rule_name"],
+            "status": row["status"],
+            "riskAtTrigger": row["risk_at_trigger"],
+            "timestamp": row["triggered_at"],
+            "acknowledgedBy": row["acknowledged_by"],
+            "acknowledgedAt": row["acknowledged_at"],
+        }
+        for row in rows
+    ]
+
+
+@app.post("/api/alert-logs")
+def create_alert_log(payload: AlertLogPayload) -> dict:
+    db_execute(
+        """
+        INSERT INTO alert_logs (
+            patient_id, bed_number, ward, rule_name, status, risk_at_trigger
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (
+            payload.patientId,
+            payload.bedNumber,
+            payload.ward,
+            payload.ruleName,
+            payload.status,
+            payload.riskAtTrigger,
+        ),
+    )
+    return {"status": "ok"}
 
 
 @app.get("/api/feature-order")

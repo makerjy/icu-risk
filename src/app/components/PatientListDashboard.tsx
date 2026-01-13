@@ -56,33 +56,50 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
   };
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem('icu-favorite-patients');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          setFavoriteOrder(parsed);
+    let isActive = true;
+
+    const fetchFavorites = async () => {
+      try {
+        const response = await fetch('/api/favorites', { cache: 'no-store' });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
         }
+        const data = (await response.json()) as string[];
+        if (isActive && Array.isArray(data)) {
+          setFavoriteOrder(data);
+        }
+      } catch {
+        // Ignore favorites load failures.
       }
-    } catch {
-      // Ignore storage failures.
-    }
+    };
+
+    fetchFavorites();
+
+    return () => {
+      isActive = false;
+    };
   }, []);
 
-  useEffect(() => {
+  const syncFavorite = async (icuId: string, favorite: boolean, rollback: string[]) => {
     try {
-      window.localStorage.setItem('icu-favorite-patients', JSON.stringify(favoriteOrder));
+      await fetch(`/api/favorites/${icuId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ favorite }),
+      });
     } catch {
-      // Ignore storage failures.
+      setFavoriteOrder(rollback);
     }
-  }, [favoriteOrder]);
+  };
 
   const toggleFavorite = (icuId: string) => {
     setFavoriteOrder((prev) => {
-      if (prev.includes(icuId)) {
-        return prev.filter((id) => id !== icuId);
-      }
-      return [icuId, ...prev];
+      const isFavorite = prev.includes(icuId);
+      const next = isFavorite ? prev.filter((id) => id !== icuId) : [icuId, ...prev];
+      void syncFavorite(icuId, !isFavorite, prev);
+      return next;
     });
   };
 
