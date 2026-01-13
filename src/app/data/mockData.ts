@@ -179,22 +179,14 @@ const FEATURE_TEMPLATES: FeatureTemplate[] = [
 ];
 
 const WARDS = [
-  '76병동 4호 2',
-  '61병동 12호 3',
-  'MICU Bed 8',
-  'MICU 격리실3',
-  '102병동 9호 6',
-  '52병동 1호 2',
-  'SICU Bed 10',
-  '81병동 처치실',
-  '96병동 2호 6',
-  '95병동 3호 1',
-  '41병동 7호 5',
-  '41병동 7호 4',
-  '81병동 처치실',
-  '102병동 9호 6',
-  'MICU 격리실1',
-  '95병동 3호 23',
+  'Intensive Care Unit (ICU)',
+  'Medical Intensive Care Unit (MICU)',
+  'Cardiac Vascular Intensive Care Unit (CVICU)',
+  'Medical/Surgical Intensive Care Unit (MICU/SICU)',
+  'Surgical Intensive Care Unit (SICU)',
+  'Trauma SICU (TSICU)',
+  'Coronary Care Unit (CCU)',
+  'Neuro Surgical Intensive Care Unit (Neuro SICU)',
 ];
 
 const DEPARTMENTS = [
