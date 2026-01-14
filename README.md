@@ -16,6 +16,46 @@
 - Postgres에 환자별 알림 규칙/즐겨찾기/알림 로그 저장
 - 모델 추론은 PyTorch 기반, 서버 시작 시 모델과 스케일러 로드
 
+### 전체 파이프라인 (FE/BE 연결 흐름)
+1) 사용자 브라우저에서 Frontend가 로드됨 (Vite dev 서버 또는 정적 빌드)
+2) Frontend는 `/api/*`로 FastAPI에 요청
+3) FastAPI는
+   - 메모리 기반 환자 시뮬레이션 데이터를 주기적으로 업데이트
+   - DB(Postgres)에 저장된 규칙/즐겨찾기/로그를 읽고 씀
+   - 모델 로딩 상태에 따라 위험도 추정값을 반영
+4) 응답된 JSON을 Frontend가 받아 대시보드/상세 화면에 반영
+
+### 프론트엔드 동작 개요
+- 진입점: `src/main.tsx` → `src/app/App.tsx`
+- 환자 목록, 상세, 알림 설정 UI는 `src/app/components/`에 분리되어 있음
+- `/api` 프록시는 `vite.config.ts`에서 설정됨 (로컬 개발 시 `http://127.0.0.1:8000`)
+
+### 백엔드 동작 개요
+- 엔트리 포인트: `server_fastapi/app.py`
+- 주요 엔드포인트
+  - `GET /api/patients`: 환자 목록
+  - `GET /api/patients/{icu_id}`: 환자 상세
+  - `GET /api/status`: 모델 로딩 상태
+  - `GET/PUT /api/patient-alert-rules`: 알림 규칙
+  - `GET/POST /api/favorites`: 즐겨찾기
+  - `GET/POST /api/alert-logs`: 알림 로그
+- 주기 업데이트 루프가 환자 데이터/위험도를 갱신함
+
+### 모델 연결 구조
+- `server_fastapi/model_adapter.py`가 모델 로딩과 추론을 담당
+- 실제 모델 구조는 `server_fastapi/model_impl.py`
+- 로딩 대상:
+  - `model/RealMIP_Pre.pth`
+  - `model/RealMIP_Gen.pth`
+  - `model/data_scaler.pkl`
+- 환경변수로 모델 경로를 변경 가능:
+  - `MODEL_PATH`, `MODEL_GEN_PATH`, `MODEL_SCALER_PATH`
+
+### 데이터/DB 연동 구조
+- `DATABASE_URL` 환경변수를 통해 Postgres 연결
+- 테이블은 서버 시작 시 `ensure_tables()`로 생성됨
+- 환자 규칙/즐겨찾기/로그는 DB에 저장되고 목록은 메모리 데이터와 합쳐져 UI에 반영됨
+
 ### 기술 스택
 - Frontend: React + Vite + Tailwind + shadcn/ui
 - Backend: FastAPI (Python)
