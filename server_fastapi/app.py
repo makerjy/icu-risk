@@ -629,7 +629,7 @@ async def start_updater() -> None:
         while True:
             for patient in PATIENTS:
                 update_patient(patient)
-            await asyncio.sleep(4)
+            await asyncio.sleep(1)
 
     asyncio.create_task(loop())
 
@@ -780,7 +780,7 @@ async def stream_patients():
         while True:
             payload = json.dumps(PATIENTS, ensure_ascii=False)
             yield f"data: {payload}\n\n"
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
     headers = {
         "Cache-Control": "no-cache",

@@ -205,7 +205,7 @@ export function PatientDetailView({
           </div>
         </div>
         <ResponsiveContainer width="100%" height={250}>
-          <ComposedChart data={riskChartWithMeds}>
+          <ComposedChart data={riskChartWithMeds} margin={{ top: 6, right: -8, left: -12, bottom: 0 }}>
             <defs>
               <linearGradient id="riskGradient" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
@@ -220,12 +220,16 @@ export function PatientDetailView({
               tick={{ fill: 'var(--muted-foreground)' }}
               tickFormatter={(value) => timeLabelByIndex.get(value) ?? ''}
               interval="preserveStartEnd"
+              tickMargin={4}
+              padding={{ left: 0, right: 0 }}
+              domain={[0, Math.max(riskChartWithMeds.length - 1, 0)]}
             />
             <YAxis 
               stroke="var(--muted-foreground)"
               tick={{ fill: 'var(--muted-foreground)' }}
               domain={[0, 100]}
               label={{ value: '위험도 (%)', angle: -90, position: 'insideLeft', fill: 'var(--muted-foreground)' }}
+              tickMargin={4}
             />
             <Tooltip
               content={({ active, payload, label }) => {
