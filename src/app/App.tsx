@@ -9,13 +9,14 @@ import {
   mockPatients,
 } from "./data/mockData";
 import { Button } from "./components/ui/button";
-import { Settings, Activity, Sun, Moon } from "lucide-react";
+import { Settings, Activity, Sun, Moon, ArrowLeft } from "lucide-react";
 import {
   ThemeProvider,
   useTheme,
 } from "./context/ThemeContext";
 
 type View = "dashboard" | "patient-detail" | "alert-management";
+const DEMO_MODE = true;
 
 function AppContent() {
   const [currentView, setCurrentView] =
@@ -67,6 +68,18 @@ function AppContent() {
     const lastUpdateMs = patient.lastDataUpdate.getTime();
     if (now - lastUpdateMs > 20 * 60 * 1000) {
       return "stale-data";
+    }
+
+    if (DEMO_MODE) {
+      const predictedHistory = patient.predictedRiskHistory ?? [];
+      const predictedMax =
+        predictedHistory.length > 0
+          ? Math.max(...predictedHistory.map((point) => point.risk))
+          : patient.currentRisk;
+      const riskValue = Math.max(patient.currentRisk, predictedMax);
+      if (riskValue >= 40) return "sustained-high";
+      if (riskValue >= 20) return "rapid-increase";
+      return "normal";
     }
 
     const rulesToUse = patient.alertRules ?? rules;
@@ -257,6 +270,10 @@ function AppContent() {
 
     const revivePatients = (payload: Patient[]) =>
       payload.map((patient) => {
+        const derivedStay =
+          (patient as any).lengthOfStayDays ??
+          (patient as any).length_of_stay_days ??
+          (parseInt(String(patient.icuId).slice(-2), 10) % 30) + 1;
         const revived = {
           ...patient,
           lastDataUpdate: new Date(patient.lastDataUpdate),
@@ -277,6 +294,7 @@ function AppContent() {
               timestamp: new Date(reading.timestamp),
             })),
           })),
+          lengthOfStayDays: derivedStay,
           medications: (patient.medications ?? []).map((med) => ({
             ...med,
             timestamp: new Date(med.timestamp),
@@ -406,6 +424,16 @@ function AppContent() {
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
+              {currentView === "patient-detail" && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={handleBackToDashboard}
+                  className="h-12 w-12 -ml-1"
+                >
+                  <ArrowLeft className="h-6 w-6" />
+                </Button>
+              )}
               <Activity className="h-7 w-7 text-red-500" />
               <div>
                 <h1 className="text-lg tracking-tight">

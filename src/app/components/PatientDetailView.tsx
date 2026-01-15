@@ -1,7 +1,8 @@
+import { useMemo, useState } from 'react';
 import { AlertRule, Patient } from '../data/mockData';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, Area, ComposedChart, BarChart, Bar, Cell } from 'recharts';
 import { Button } from './ui/button';
-import { ArrowLeft, AlertTriangle, Circle } from 'lucide-react';
+import { AlertTriangle, Circle } from 'lucide-react';
 import { RiskBadge } from './RiskBadge';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
@@ -22,6 +23,8 @@ export function PatientDetailView({
   onUpdateAlertRules,
   onBack,
 }: PatientDetailViewProps) {
+  const DEMO_MODE = true;
+  const [riskTab, setRiskTab] = useState<'recent' | 'daily'>('recent');
   const formatBedLabel = (bedNumber: string) => `ICU-${bedNumber.slice(-3)}`;
   const updateRule = (id: string, updates: Partial<AlertRule>) => {
     onUpdateAlertRules(
@@ -30,6 +33,59 @@ export function PatientDetailView({
       )
     );
   };
+  const isLongStay = (patient.lengthOfStayDays ?? 0) >= 7;
+  const dailyTrendData = useMemo(() => {
+    if (!isLongStay) return [];
+    const days = 14;
+    const data: Array<{
+      dateLabel: string;
+      dailySummary: number;
+      highRiskMinutes: number;
+      maxRisk: number;
+    }> = [];
+    const baseRisk = patient.currentRisk;
+    const now = new Date();
+    const seed = Number(String(patient.icuId).slice(-3)) || 0;
+    const stableJitter = (offset: number) =>
+      Math.sin((seed + offset) * 0.7) * 0.6 +
+      Math.cos((seed + offset) * 0.3) * 0.4;
+    const todayJitter = () =>
+      (Math.sin(Date.now() / 600000) + Math.cos(Date.now() / 420000)) * 0.6;
+
+    for (let dayOffset = days - 1; dayOffset >= 0; dayOffset -= 1) {
+      const dayDate = new Date(
+        now.getTime() - dayOffset * 24 * 60 * 60 * 1000
+      );
+      const baselineOffset =
+        dayOffset === 0 ? stableJitter(dayOffset) + todayJitter() : stableJitter(dayOffset);
+      const dayBaseline = Math.max(0, Math.min(100, baseRisk + baselineOffset));
+      const samples: number[] = [];
+      for (let hour = 0; hour < 24; hour += 1) {
+        const jitter =
+          Math.sin((hour + dayOffset + seed) / 2) * 0.4;
+        const value = Math.max(0, Math.min(100, dayBaseline + jitter));
+        samples.push(value);
+      }
+      const sorted = [...samples].sort((a, b) => b - a);
+      const topCount = Math.max(1, Math.ceil(sorted.length * 0.1));
+      const topAvg =
+        sorted.slice(0, topCount).reduce((acc, v) => acc + v, 0) / topCount;
+      const highRiskMinutes = samples.reduce(
+        (acc, v) => acc + (v >= 70 ? 60 : 0),
+        0
+      );
+      const maxRisk = sorted[0] ?? 0;
+      data.push({
+        dateLabel: format(dayDate, 'M/d', { locale: ko }),
+        dailySummary: Number(topAvg.toFixed(1)),
+        highRiskMinutes,
+        maxRisk: Number(maxRisk.toFixed(1)),
+      });
+    }
+
+    return data;
+  }, [isLongStay, patient.currentRisk, patient.icuId]);
+
   // Prepare risk data for chart
   const riskChartData = patient.riskHistory.map((point, index) => {
     const ts = point.timestamp instanceof Date
@@ -103,7 +159,10 @@ export function PatientDetailView({
     .slice(0, 3);
 
   // Find first threshold exceedance
-  const thresholdExceedanceIndex = patient.riskHistory.findIndex(point => point.risk > 70);
+  const alertThreshold = DEMO_MODE ? 20 : 70;
+  const thresholdExceedanceIndex = patient.riskHistory.findIndex(
+    (point) => point.risk > alertThreshold
+  );
   const firstExceedance = thresholdExceedanceIndex >= 0 
     ? patient.riskHistory[thresholdExceedanceIndex] 
     : null;
@@ -143,35 +202,31 @@ export function PatientDetailView({
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={onBack} className="hover:bg-accent">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            대시보드로 돌아가기
-          </Button>
-          <div className="h-8 w-px bg-border" />
-          <div>
-            <h1 className="text-3xl font-mono">
-              {formatBedLabel(patient.bedNumber)}
-            </h1>
-            <p className="text-muted-foreground mt-1">환자 상세 정보</p>
-            <p className="text-xs text-muted-foreground">
-              {patient.age}세 · {patient.sex}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {patient.ward} · {patient.department}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              입실 원인: {patient.admissionCause}
-            </p>
-          </div>
+        <div>
+          <h1 className="text-3xl font-mono">
+            {formatBedLabel(patient.bedNumber)}
+          </h1>
+          <p className="text-muted-foreground mt-1">환자 상세 정보</p>
+          <p className="text-xs text-muted-foreground">
+            {patient.age}세 · {patient.sex}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {patient.ward} · {patient.department}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            재원 {patient.lengthOfStayDays ?? 1}일
+          </p>
+          <p className="text-xs text-muted-foreground">
+            입실 원인: {patient.admissionCause}
+          </p>
         </div>
         <div className="flex items-center gap-4">
           <div className="text-right">
             <div className="text-sm text-muted-foreground">현재 위험도</div>
             <div 
               className={`text-4xl font-mono ${
-                patient.currentRisk >= 70 ? 'text-red-500' :
-                patient.currentRisk >= 50 ? 'text-orange-500' :
+                patient.currentRisk >= (DEMO_MODE ? 40 : 70) ? 'text-red-500' :
+                patient.currentRisk >= (DEMO_MODE ? 20 : 50) ? 'text-orange-500' :
                 'text-green-500'
               }`}
             >
@@ -187,155 +242,278 @@ export function PatientDetailView({
         <div className="mb-4 flex items-start justify-between gap-6">
           <div>
             <h2 className="text-xl">사망 위험도 추이</h2>
-            <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
-              <span>최근 6시간</span>
-              <div className="flex items-center gap-2 text-xs">
-                <span className="inline-flex items-center gap-1 text-red-400">
-                  <span className="h-0.5 w-4 bg-red-400" />
-                  현재 위험도
-                </span>
-                <span className="inline-flex items-center gap-1 text-orange-400">
-                  <span className="h-0.5 w-4 border-t-2 border-dashed border-orange-400" />
-                  예측 위험도
-                </span>
-              </div>
-              <div className="flex items-center gap-2 text-sky-300">
-                <span className="inline-block h-3 w-px bg-sky-400" />
-                <span>투약 타임스탬프</span>
-              </div>
-              {firstExceedance && (
-                <div className="flex items-center gap-2 text-red-400">
-                  <AlertTriangle className="h-4 w-4" />
-                  <span>
-                    {format(firstExceedance.timestamp, 'HH:mm', { locale: ko })}에 70% 초과
-                  </span>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button
+                variant={riskTab === 'recent' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setRiskTab('recent')}
+                className="h-8 px-3"
+              >
+                분 단위 추이
+              </Button>
+              <Button
+                variant={riskTab === 'daily' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setRiskTab('daily')}
+                className="h-8 px-3"
+                disabled={!isLongStay}
+              >
+                일 단위 추이
+              </Button>
+              {!isLongStay && (
+                <div className="text-xs text-muted-foreground">
+                  7일 이상 재원 환자부터 일 단위 위험 추이를 확인할 수 있습니다.
                 </div>
               )}
             </div>
-          </div>
-          <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground min-w-[220px]">
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground/80">최근 투약</div>
-            {recentMedications.length === 0 ? (
-              <div className="mt-2 text-muted-foreground">투약 기록 없음</div>
-            ) : (
-              <div className="mt-2 space-y-1">
-                {recentMedications.map((med, idx) => (
-                  <div key={`${med.name}-${idx}`} className="flex items-center justify-between gap-2">
-                    <div className="text-foreground truncate">
-                      {med.name} {med.dose} {med.route}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {format(med.timestamp, 'HH:mm')}
-                    </div>
+            <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+              {riskTab === 'recent' && (
+                <>
+                  <span>최근 6시간</span>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="inline-flex items-center gap-1 text-red-400">
+                      <span className="h-0.5 w-4 bg-red-400" />
+                      현재 위험도
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-orange-400">
+                      <span className="h-0.5 w-4 border-t-2 border-dashed border-orange-400" />
+                      예측 위험도
+                    </span>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        <ResponsiveContainer width="100%" height={250}>
-          <ComposedChart data={riskChartWithMeds} margin={{ top: 6, right: -8, left: -12, bottom: 0 }}>
-            <defs>
-              <linearGradient id="riskGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
-              </linearGradient>
-              <linearGradient id="forecastGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#f97316" stopOpacity={0.22}/>
-                <stop offset="95%" stopColor="#f97316" stopOpacity={0}/>
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-            <XAxis 
-              dataKey="index"
-              type="number"
-              stroke="var(--muted-foreground)"
-              tick={{ fill: 'var(--muted-foreground)' }}
-              tickFormatter={(value) => timeLabelByIndex.get(value) ?? ''}
-              interval="preserveStartEnd"
-              tickMargin={4}
-              padding={{ left: 0, right: 0 }}
-              domain={[0, Math.max(riskChartWithMeds.length - 1, 0)]}
-            />
-            <YAxis 
-              stroke="var(--muted-foreground)"
-              tick={{ fill: 'var(--muted-foreground)' }}
-              domain={[0, 100]}
-              label={{ value: '위험도 (%)', angle: -90, position: 'insideLeft', fill: 'var(--muted-foreground)' }}
-              tickMargin={4}
-            />
-            <Tooltip
-              content={({ active, payload, label }) => {
-                if (!active || !payload || payload.length === 0) return null;
-                const point = payload[0]?.payload as any;
-                const riskValue = point?.risk ?? point?.predictedRisk;
-                const meds = point?.medLabels ?? [];
-                const isForecast = point?.risk === undefined;
-                return (
-                  <div className="rounded-md border border-border bg-card px-3 py-2 text-xs text-card-foreground shadow-sm">
-                    <div className="text-sm font-medium">
-                      {timeLabelByIndex.get(label) ?? ''}
-                    </div>
-                    <div className="mt-1 text-muted-foreground">
-                      위험도{isForecast ? ' (예측)' : ''}:{' '}
-                      <span className="font-mono text-foreground">
-                        {Number(riskValue).toFixed(1)}%
+                </>
+              )}
+              {riskTab === 'daily' && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>최근 14일</span>
+                  <span className="inline-flex items-center gap-1 text-orange-400">
+                    <span className="h-0.5 w-4 bg-orange-400" />
+                    일 단위 위험 요약 (상위 10% 평균)
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-sky-300">
+                    <span className="h-3 w-3 rounded-sm bg-sky-300" />
+                    고위험 지속시간 (≥70%)
+                  </span>
+                </div>
+              )}
+              {riskTab === 'recent' && (
+                <>
+                  <div className="flex items-center gap-2 text-sky-300">
+                    <span className="inline-block h-3 w-px bg-sky-400" />
+                    <span>투약 타임스탬프</span>
+                  </div>
+                  {firstExceedance && (
+                    <div className="flex items-center gap-2 text-red-400">
+                      <AlertTriangle className="h-4 w-4" />
+                      <span>
+                        {format(firstExceedance.timestamp, 'HH:mm', { locale: ko })}에 {alertThreshold}% 초과
                       </span>
                     </div>
-                    {meds.length > 0 && (
-                      <div className="mt-2">
-                        <div className="text-sky-400">투약</div>
-                        <div className="mt-1 space-y-1 text-muted-foreground">
-                          {meds.map((med: string, idx: number) => (
-                            <div key={`${med}-${idx}`}>• {med}</div>
-                          ))}
-                        </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+          {riskTab === 'recent' && (
+            <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground min-w-[220px]">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground/80">최근 투약</div>
+              {recentMedications.length === 0 ? (
+                <div className="mt-2 text-muted-foreground">투약 기록 없음</div>
+              ) : (
+                <div className="mt-2 space-y-1">
+                  {recentMedications.map((med, idx) => (
+                    <div key={`${med.name}-${idx}`} className="flex items-center justify-between gap-2">
+                      <div className="text-foreground truncate">
+                        {med.name} {med.dose} {med.route}
                       </div>
-                    )}
-                  </div>
-                );
-              }}
-            />
-            <ReferenceLine y={70} stroke="#dc2626" strokeDasharray="5 5" label={{ value: '임계값', fill: '#dc2626', position: 'right' }} />
-            <Area 
-              type="monotone" 
-              dataKey="risk" 
-              stroke="#ef4444" 
-              strokeWidth={3}
-              fill="url(#riskGradient)"
-            />
-            <Area
-              type="monotone"
-              dataKey="predictedRisk"
-              stroke="#f97316"
-              strokeWidth={2}
-              strokeDasharray="6 6"
-              fill="url(#forecastGradient)"
-              fillOpacity={1}
-              dot={false}
-            />
-            {[...medLineIndices].map((index) => (
-              <ReferenceArea
-                key={`med-band-${index}`}
-                x1={index - 0.4}
-                x2={index + 0.4}
-                fill="#22d3ee"
-                fillOpacity={0.08}
-                strokeOpacity={0}
+                      <div className="text-[11px] text-muted-foreground">
+                        {format(med.timestamp, 'HH:mm')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {riskTab === 'recent' && (
+          <ResponsiveContainer width="100%" height={250}>
+            <ComposedChart data={riskChartWithMeds} margin={{ top: 6, right: -8, left: -12, bottom: 0 }}>
+              <defs>
+                <linearGradient id="riskGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                </linearGradient>
+                <linearGradient id="forecastGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f97316" stopOpacity={0.22}/>
+                  <stop offset="95%" stopColor="#f97316" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <XAxis 
+                dataKey="index"
+                type="number"
+                stroke="var(--muted-foreground)"
+                tick={{ fill: 'var(--muted-foreground)' }}
+                tickFormatter={(value) => timeLabelByIndex.get(value) ?? ''}
+                interval="preserveStartEnd"
+                tickMargin={4}
+                padding={{ left: 0, right: 0 }}
+                domain={[0, Math.max(riskChartWithMeds.length - 1, 0)]}
               />
-            ))}
-            {[...medLineIndices].map((index) => (
+              <YAxis 
+                stroke="var(--muted-foreground)"
+                tick={{ fill: 'var(--muted-foreground)' }}
+                domain={[0, 100]}
+                label={{ value: '위험도 (%)', angle: -90, position: 'insideLeft', fill: 'var(--muted-foreground)' }}
+                tickMargin={4}
+              />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload || payload.length === 0) return null;
+                  const point = payload[0]?.payload as any;
+                  const riskValue = point?.risk ?? point?.predictedRisk;
+                  const meds = point?.medLabels ?? [];
+                  const isForecast = point?.risk === undefined;
+                  return (
+                    <div className="rounded-md border border-border bg-card/90 px-3 py-2 text-xs text-card-foreground shadow-sm">
+                      <div className="text-sm font-medium">
+                        {timeLabelByIndex.get(label) ?? ''}
+                      </div>
+                      <div className="mt-1 text-muted-foreground">
+                        위험도{isForecast ? ' (예측)' : ''}:{' '}
+                        <span className="font-mono text-foreground">
+                          {Number(riskValue).toFixed(1)}%
+                        </span>
+                      </div>
+                      {meds.length > 0 && (
+                        <div className="mt-2">
+                          <div className="text-sky-400">투약</div>
+                          <div className="mt-1 space-y-1 text-muted-foreground">
+                            {meds.map((med: string, idx: number) => (
+                              <div key={`${med}-${idx}`}>• {med}</div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }}
+              />
               <ReferenceLine
-                key={`med-line-${index}`}
-                x={index}
-                stroke="#22d3ee"
-                strokeWidth={2}
-                strokeDasharray="6 4"
-                strokeOpacity={0.95}
+                y={alertThreshold}
+                stroke="#dc2626"
+                strokeDasharray="5 5"
+                label={{ value: '임계값', fill: '#dc2626', position: 'right' }}
               />
-            ))}
-          </ComposedChart>
-        </ResponsiveContainer>
+              <Area 
+                type="monotone" 
+                dataKey="risk" 
+                stroke="#ef4444" 
+                strokeWidth={3}
+                fill="url(#riskGradient)"
+              />
+              <Area
+                type="monotone"
+                dataKey="predictedRisk"
+                stroke="#f97316"
+                strokeWidth={2}
+                strokeDasharray="6 6"
+                fill="url(#forecastGradient)"
+                fillOpacity={1}
+                dot={false}
+              />
+              {[...medLineIndices].map((index) => (
+                <ReferenceArea
+                  key={`med-band-${index}`}
+                  x1={index - 0.4}
+                  x2={index + 0.4}
+                  fill="#22d3ee"
+                  fillOpacity={0.08}
+                  strokeOpacity={0}
+                />
+              ))}
+              {[...medLineIndices].map((index) => (
+                <ReferenceLine
+                  key={`med-line-${index}`}
+                  x={index}
+                  stroke="#22d3ee"
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                  strokeOpacity={0.95}
+                />
+              ))}
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+        {riskTab === 'daily' && isLongStay && (
+          <div className="space-y-3">
+            <div
+              className="rounded-md border border-border p-3"
+              style={{
+                background:
+                  'linear-gradient(180deg, rgba(56, 189, 248, 0.08) 0%, rgba(56, 189, 248, 0) 60%)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={260}>
+                <ComposedChart data={dailyTrendData} margin={{ top: 8, right: 16, left: -8, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="dateLabel" stroke="var(--muted-foreground)" tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }} />
+                  <YAxis yAxisId="left" stroke="var(--muted-foreground)" tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }} domain={[0, 100]} />
+                  <YAxis yAxisId="right" orientation="right" stroke="var(--muted-foreground)" tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }} domain={[0, 240]} />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload || payload.length === 0) return null;
+                      const point = payload[0]?.payload as any;
+                      return (
+                        <div className="rounded-md border border-border bg-card/90 px-3 py-2 text-xs text-card-foreground shadow-sm">
+                          <div className="text-sm font-medium">{point?.dateLabel}</div>
+                          <div className="mt-1 text-muted-foreground">
+                            일 단위 위험 요약: <span className="font-mono text-foreground">{point?.dailySummary?.toFixed(1)}%</span>
+                          </div>
+                          <div className="mt-1 text-muted-foreground">
+                            고위험 지속시간: <span className="font-mono text-foreground">{point?.highRiskMinutes}분</span>
+                          </div>
+                          <div className="mt-1 text-muted-foreground">
+                            최고 위험도: <span className="font-mono text-foreground">{point?.maxRisk?.toFixed(1)}%</span>
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Line
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="dailySummary"
+                    stroke="#f97316"
+                    strokeWidth={2}
+                    dot={(props: any) => {
+                      const { cx, cy, payload } = props;
+                      if (cx === undefined || cy === undefined) return null;
+                      const color = payload.dailySummary >= 70 ? '#ef4444' : '#f97316';
+                      return <circle cx={cx} cy={cy} r={3} fill={color} stroke={color} />;
+                    }}
+                  />
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="highRiskMinutes"
+                    stroke="#38bdf8"
+                    strokeWidth={2}
+                    dot={(props: any) => {
+                      const { cx, cy, payload } = props;
+                      if (cx === undefined || cy === undefined) return null;
+                      const color = payload.highRiskMinutes >= 60 ? '#f97316' : '#38bdf8';
+                      return <circle cx={cx} cy={cy} r={3} fill={color} stroke={color} />;
+                    }}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              일 단위 위험도는 하루 동안 관측된 위험도 분포를 요약한 지표이며, 실제 사망 확률 예측값은 아님.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Two Column Layout */}

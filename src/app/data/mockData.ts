@@ -52,6 +52,7 @@ export interface Patient {
   ward: string;
   department: string;
   admissionCause: string;
+  lengthOfStayDays?: number;
   age: number;
   sex: 'F' | 'M';
   currentRisk: number; // 0-100
@@ -144,7 +145,10 @@ function generateRiskHistory(
       risk = currentRisk + (Math.random() - 0.5) * 3;
     }
 
-    history.push({ timestamp, risk: Math.max(0, Math.min(100, risk)) });
+    const capped = DEMO_MODE
+      ? Math.max(0, Math.min(DEMO_RISK_MAX, risk))
+      : Math.max(0, Math.min(100, risk));
+    history.push({ timestamp, risk: Number(capped.toFixed(2)) });
   }
 
   return history;
@@ -167,7 +171,10 @@ function generateForecastHistory(
     const timestamp = new Date(lastPoint.timestamp.getTime() + i * intervalMs);
     const risk = Math.max(
       0,
-      Math.min(100, Math.round(lastPoint.risk + slope * i))
+      Math.min(
+        DEMO_MODE ? DEMO_RISK_MAX : 100,
+        Math.round(lastPoint.risk + slope * i)
+      )
     );
     forecast.push({ timestamp, risk });
   }
@@ -224,6 +231,18 @@ const FEATURE_TEMPLATES: FeatureTemplate[] = [
   { key: 'gcs_motor', name: 'GCS – motor', unit: 'score', normalRange: [5, 6], baseValue: 5.4, variance: 1, min: 1, max: 6, round: 0, discrete: true },
 ];
 
+const DEMO_MODE = true;
+const DEMO_RISK_SCALE = 0.2;
+const DEMO_RISK_MAX = 20;
+const DEMO_VITAL_RANGES: Record<string, [number, number]> = {
+  hr: [60, 110],
+  sbp: [95, 140],
+  spo2: [92, 100],
+  rr: [12, 24],
+  creatinine: [0.6, 1.8],
+  wbc: [4, 15],
+};
+
 const WARDS = [
   'Intensive Care Unit (ICU)',
   'Medical Intensive Care Unit (MICU)',
@@ -256,52 +275,84 @@ const DEPARTMENTS = [
 
 const ALERT_PROFILES = [
   {
-    currentRisk: 78,
+    currentRisk: 0.3,
+    trend: 'stable' as const,
+    changeInLast30Min: 0,
+    alertStatus: 'normal' as const,
+    imputedDataPercentage: 0,
+    topContributors: ['Age', 'SBP', 'SpO2'],
+  },
+  {
+    currentRisk: 0.6,
+    trend: 'stable' as const,
+    changeInLast30Min: 0,
+    alertStatus: 'normal' as const,
+    imputedDataPercentage: 0,
+    topContributors: ['Albumin', 'RR', 'Temp'],
+  },
+  {
+    currentRisk: 0.9,
+    trend: 'decreasing' as const,
+    changeInLast30Min: -1,
+    alertStatus: 'normal' as const,
+    imputedDataPercentage: 0,
+    topContributors: ['Platelet', 'GCS', 'SpO2'],
+  },
+  {
+    currentRisk: 1.2,
+    trend: 'stable' as const,
+    changeInLast30Min: 1,
+    alertStatus: 'normal' as const,
+    imputedDataPercentage: 0,
+    topContributors: ['Age', 'RR', 'SpO2'],
+  },
+  {
+    currentRisk: 2.0,
+    trend: 'stable' as const,
+    changeInLast30Min: 1,
+    alertStatus: 'normal' as const,
+    imputedDataPercentage: 0,
+    topContributors: ['BUN', 'Temp', 'SBP'],
+  },
+  {
+    currentRisk: 3.0,
+    trend: 'stable' as const,
+    changeInLast30Min: 2,
+    alertStatus: 'normal' as const,
+    imputedDataPercentage: 0,
+    topContributors: ['INR', 'Platelet', 'Bilirubin'],
+  },
+  {
+    currentRisk: 4.0,
     trend: 'increasing' as const,
-    changeInLast30Min: 12,
-    alertStatus: 'rapid-increase' as const,
+    changeInLast30Min: 3,
+    alertStatus: 'normal' as const,
+    imputedDataPercentage: 0,
+    topContributors: ['SpO2 ↓', 'RR ↑', 'Temp'],
+  },
+  {
+    currentRisk: 5.0,
+    trend: 'stable' as const,
+    changeInLast30Min: 2,
+    alertStatus: 'normal' as const,
+    imputedDataPercentage: 0,
+    topContributors: ['SpO2 ↓', 'pO2 ↓', 'SBP ↓'],
+  },
+  {
+    currentRisk: 8.0,
+    trend: 'increasing' as const,
+    changeInLast30Min: 4,
+    alertStatus: 'normal' as const,
     imputedDataPercentage: 0,
     topContributors: ['BUN ↑', 'SpO2 ↓', 'Creatinine ↑'],
   },
   {
-    currentRisk: 45,
+    currentRisk: 12.0,
     trend: 'stable' as const,
-    changeInLast30Min: -2,
-    alertStatus: 'normal' as const,
-    imputedDataPercentage: 0,
-    topContributors: ['Age', 'GCS ↓', 'RR ↑'],
-  },
-  {
-    currentRisk: 92,
-    trend: 'stable' as const,
-    changeInLast30Min: 1,
-    alertStatus: 'sustained-high' as const,
-    imputedDataPercentage: 0,
-    topContributors: ['SpO2 ↓↓', 'pO2 ↓', 'SBP ↓'],
-  },
-  {
-    currentRisk: 28,
-    trend: 'decreasing' as const,
-    changeInLast30Min: -8,
-    alertStatus: 'normal' as const,
-    imputedDataPercentage: 0,
-    topContributors: ['Albumin ↓', 'Age', 'Platelets ↓'],
-  },
-  {
-    currentRisk: 65,
-    trend: 'stable' as const,
-    changeInLast30Min: 0,
+    changeInLast30Min: 3,
     alertStatus: 'stale-data' as const,
     imputedDataPercentage: 0,
     topContributors: ['FiO2 ↑', 'pCO2 ↑', 'SpO2 ↓'],
-  },
-  {
-    currentRisk: 55,
-    trend: 'increasing' as const,
-    changeInLast30Min: 7,
-    alertStatus: 'normal' as const,
-    imputedDataPercentage: 0,
-    topContributors: ['INR ↑', 'Platelet ↓', 'Bilirubin ↑'],
   },
 ];
 
@@ -351,12 +402,22 @@ function buildFeatures(profileIndex: number): Feature[] {
 
   return FEATURE_TEMPLATES.map((template, idx) => {
     const bias = 1 + ((idx % 3) - 1) * 0.04;
-    const baseValue = template.baseValue * (idx % 5 === 0 ? riskBias : bias);
+    let baseValue = template.baseValue * (idx % 5 === 0 ? riskBias : bias);
+    let variance = template.variance;
+    let min = template.min;
+    let max = template.max;
+    if (DEMO_MODE && DEMO_VITAL_RANGES[template.key]) {
+      const [low, high] = DEMO_VITAL_RANGES[template.key];
+      baseValue = (low + high) / 2;
+      variance = (high - low) / 3;
+      min = low;
+      max = high;
+    }
     const contribution = (Math.random() - 0.45) * 40;
-    const readings = generateVitalReadings(baseValue, template.variance, 6, {
+    const readings = generateVitalReadings(baseValue, variance, 6, {
       imputationRate: template.imputationRate ?? 0.12,
-      min: template.min,
-      max: template.max,
+      min,
+      max,
       round: template.round,
       discrete: template.discrete,
     });
@@ -422,15 +483,22 @@ function createPatient(index: number): Patient {
   const ward = WARDS[index % WARDS.length];
   const department = DEPARTMENTS[index % DEPARTMENTS.length];
   const admissionCause = ADMISSION_CAUSES[index % ADMISSION_CAUSES.length];
+  const lengthOfStayDays =
+    index % 10 < 3
+      ? clamp(Math.round(7 + seededRandom(index + 99) * 23), 7, 30)
+      : clamp(Math.round(1 + seededRandom(index + 99) * 14), 1, 14);
   const minutesAgoOptions = [2, 3, 5, 7, 12, 25];
   const minutesAgo = minutesAgoOptions[index % minutesAgoOptions.length];
-  const riskJitter = (seededRandom(index + 1) - 0.5) * 22;
-  const currentRisk = clamp(
-    Math.round(profile.currentRisk + riskJitter),
-    5,
-    98
+  const riskJitter = (seededRandom(index + 1) - 0.5) * 1.2;
+  const rawRisk = clamp(
+    Number((profile.currentRisk + riskJitter).toFixed(2)),
+    0,
+    DEMO_RISK_MAX
   );
-  const changeJitter = Math.round((seededRandom(index + 42) - 0.5) * 8);
+  const currentRisk = DEMO_MODE
+    ? Number(clamp(rawRisk * DEMO_RISK_SCALE, 0, DEMO_RISK_MAX).toFixed(2))
+    : rawRisk;
+  const changeJitter = Math.round((seededRandom(index + 42) - 0.5) * 2);
   const changeInLast30Min = profile.changeInLast30Min + changeJitter;
   const age = clamp(
     Math.round(22 + seededRandom(index + 7) * 68),
@@ -450,6 +518,7 @@ function createPatient(index: number): Patient {
     ward,
     department,
     admissionCause,
+    lengthOfStayDays,
     age,
     sex,
     currentRisk,

@@ -16,8 +16,10 @@ interface PatientListDashboardProps {
 
 type SortField = 'bedNumber' | 'currentRisk' | 'changeInLast30Min' | 'lastDataUpdate';
 type SortDirection = 'asc' | 'desc';
+type StayUnit = 'day' | 'week' | 'month';
 
 export function PatientListDashboard({ patients, onSelectPatient }: PatientListDashboardProps) {
+  const DEMO_MODE = true;
   const extractWardCode = (ward: string) => {
     const match = ward.match(/\(([^)]+)\)/);
     return match ? match[1] : ward;
@@ -38,6 +40,10 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
   const [filterHighRisk, setFilterHighRisk] = useState(false);
   const [filterStaleData, setFilterStaleData] = useState(false);
   const [selectedWard, setSelectedWard] = useState('전체');
+  const [stayFilterEnabled, setStayFilterEnabled] = useState(false);
+  const [stayUnit, setStayUnit] = useState<StayUnit>('day');
+  const [stayValue, setStayValue] = useState(1);
+  const [stayMinValue, setStayMinValue] = useState(1);
   const [favoriteOrder, setFavoriteOrder] = useState<string[]>([]);
   const favoritesSet = useMemo(() => new Set(favoriteOrder), [favoriteOrder]);
   const wardOptions = useMemo(() => {
@@ -121,11 +127,44 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
     return sorted;
   };
 
+  const maxStayDays = useMemo(() => {
+    if (patients.length === 0) return 1;
+    return Math.max(
+      ...patients.map((patient) => patient.lengthOfStayDays ?? 1)
+    );
+  }, [patients]);
+
+  const maxStayValue = useMemo(() => {
+    if (stayUnit === 'day') return Math.max(1, maxStayDays);
+    if (stayUnit === 'week') return Math.max(1, Math.floor(maxStayDays / 7));
+    return Math.max(1, Math.floor(maxStayDays / 30));
+  }, [stayUnit, maxStayDays]);
+
   const sortedAndFilteredPatients = useMemo(() => {
     let filtered = [...patients];
+    const stayThreshold =
+      stayUnit === 'day'
+        ? stayValue
+        : stayUnit === 'week'
+        ? stayValue * 7
+        : stayValue * 30;
+    const stayMinThreshold =
+      stayUnit === 'day'
+        ? stayMinValue
+        : stayUnit === 'week'
+        ? stayMinValue * 7
+        : stayMinValue * 30;
 
     if (selectedWard !== '전체') {
       filtered = filtered.filter((patient) => patient.ward === selectedWard);
+    }
+    if (stayFilterEnabled) {
+      filtered = filtered.filter((patient) => {
+        const stay = patient.lengthOfStayDays ?? 1;
+        const minValue = stayMinThreshold > 0 ? stayMinThreshold : 0;
+        const maxValue = stayThreshold > 0 ? stayThreshold : Infinity;
+        return stay >= minValue && stay <= maxValue;
+      });
     }
     if (filterRapidIncrease) {
       filtered = filtered.filter(p => p.alertStatus === 'rapid-increase');
@@ -163,9 +202,22 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
     filterHighRisk,
     filterStaleData,
     selectedWard,
+    stayUnit,
+    stayValue,
+    stayMinValue,
+    stayFilterEnabled,
     favoritesSet,
     favoriteOrder,
   ]);
+
+  useEffect(() => {
+    if (stayValue > maxStayValue) {
+      setStayValue(maxStayValue);
+    }
+    if (stayMinValue > maxStayValue) {
+      setStayMinValue(maxStayValue);
+    }
+  }, [maxStayValue, stayValue, stayMinValue]);
 
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortField !== field) return <ArrowUpDown className="h-4 w-4 ml-1 opacity-30" />;
@@ -192,13 +244,13 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
     }[] = [];
 
     const statusToLabel = (status: Patient['alertStatus']) => {
-      if (status === 'rapid-increase') return '급격한 증가';
-      if (status === 'sustained-high') return '지속적 고위험';
+      if (status === 'rapid-increase') return DEMO_MODE ? '주의' : '급격한 증가';
+      if (status === 'sustained-high') return DEMO_MODE ? '위험' : '지속적 고위험';
       if (status === 'stale-data') return '데이터 지연';
       return '정상';
     };
 
-    patients.forEach((patient) => {
+    sortedAndFilteredPatients.forEach((patient) => {
       if (patient.alertStatus !== 'normal') {
         items.push({
           id: `${patient.icuId}-risk`,
@@ -229,7 +281,7 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
 
     items.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
     return items.slice(0, 8);
-  }, [patients]);
+  }, [sortedAndFilteredPatients]);
 
   const activeAlertCount = useMemo(() => {
     const riskAlerts = sortedAndFilteredPatients.filter(
@@ -276,45 +328,125 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
         </div>
 
         {/* Filters */}
-        <div className="flex gap-3 items-center p-4 bg-card rounded-lg border border-border">
-          <Filter className="h-5 w-5 text-muted-foreground" />
-          <span className="text-sm text-muted-foreground">필터:</span>
-          <Button
-            variant={filterRapidIncrease ? "default" : "outline"}
-            size="sm"
-            onClick={() => setFilterRapidIncrease(!filterRapidIncrease)}
-            className={filterRapidIncrease ? "bg-orange-600 hover:bg-orange-700" : ""}
-          >
-            급격한 증가
-          </Button>
-          <Button
-            variant={filterHighRisk ? "default" : "outline"}
-            size="sm"
-            onClick={() => setFilterHighRisk(!filterHighRisk)}
-            className={filterHighRisk ? "bg-red-600 hover:bg-red-700" : ""}
-          >
-            지속적 고위험
-          </Button>
-          <Button
-            variant={filterStaleData ? "default" : "outline"}
-            size="sm"
-            onClick={() => setFilterStaleData(!filterStaleData)}
-            className={filterStaleData ? "bg-gray-600 hover:bg-gray-700" : ""}
-          >
-            데이터 지연
-          </Button>
-          {(filterRapidIncrease || filterHighRisk || filterStaleData) && (
+        <div className="space-y-3 p-4 bg-card rounded-lg border border-border">
+          <div className="flex flex-wrap gap-3 items-center">
+            <Filter className="h-5 w-5 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">필터:</span>
             <Button
-              variant="ghost"
+              variant={filterRapidIncrease ? "default" : "outline"}
               size="sm"
-              onClick={() => {
-                setFilterRapidIncrease(false);
-                setFilterHighRisk(false);
-                setFilterStaleData(false);
-              }}
+              onClick={() => setFilterRapidIncrease(!filterRapidIncrease)}
+              className={filterRapidIncrease ? "bg-orange-600 hover:bg-orange-700" : ""}
             >
-              전체 보기
+              급격한 증가
             </Button>
+            <Button
+              variant={filterHighRisk ? "default" : "outline"}
+              size="sm"
+              onClick={() => setFilterHighRisk(!filterHighRisk)}
+              className={filterHighRisk ? "bg-red-600 hover:bg-red-700" : ""}
+            >
+              지속적 고위험
+            </Button>
+            <Button
+              variant={filterStaleData ? "default" : "outline"}
+              size="sm"
+              onClick={() => setFilterStaleData(!filterStaleData)}
+              className={filterStaleData ? "bg-gray-600 hover:bg-gray-700" : ""}
+            >
+              데이터 지연
+            </Button>
+            <Button
+              variant={stayFilterEnabled ? "default" : "outline"}
+              size="sm"
+              onClick={() => setStayFilterEnabled((prev) => !prev)}
+              className={stayFilterEnabled ? "bg-blue-600 hover:bg-blue-700" : ""}
+            >
+              재원기간 설정
+            </Button>
+            {(filterRapidIncrease || filterHighRisk || filterStaleData) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setFilterRapidIncrease(false);
+                  setFilterHighRisk(false);
+                  setFilterStaleData(false);
+                }}
+              >
+                전체 보기
+              </Button>
+            )}
+          </div>
+          {stayFilterEnabled && (
+            <div className="flex flex-wrap gap-3 items-center">
+              <span className="text-sm text-muted-foreground">기간 단위:</span>
+              <div className="flex gap-2">
+                {(['day', 'week', 'month'] as const).map((unit) => {
+                  const minThreshold =
+                    unit === 'day' ? 1 : unit === 'week' ? 7 : 30;
+                  const disabled = maxStayDays < minThreshold;
+                  return (
+                    <Button
+                      key={unit}
+                      variant={stayUnit === unit ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => {
+                        setStayUnit(unit);
+                        setStayValue(1);
+                      }}
+                      className={stayUnit === unit ? "bg-blue-600 hover:bg-blue-700" : ""}
+                      disabled={disabled}
+                    >
+                      {unit === 'day' ? 'Day' : unit === 'week' ? 'Week' : 'Month'}
+                    </Button>
+                  );
+                })}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={maxStayValue}
+                  placeholder="최소"
+                  value={stayMinValue === 0 ? '' : stayMinValue}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === '') {
+                      setStayMinValue(0);
+                      return;
+                    }
+                    const next = Number(value);
+                    setStayMinValue(Number.isFinite(next) ? next : 0);
+                  }}
+                  className="h-8 w-20 rounded-md border border-border bg-card px-2 text-xs text-foreground"
+                />
+                <span className="text-xs text-muted-foreground">~</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={maxStayValue}
+                  placeholder="최대"
+                  value={stayValue === 0 ? '' : stayValue}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === '') {
+                      setStayValue(0);
+                      return;
+                    }
+                    const next = Number(value);
+                    setStayValue(Number.isFinite(next) ? next : 0);
+                  }}
+                  className="h-8 w-20 rounded-md border border-border bg-card px-2 text-xs text-foreground"
+                />
+                <span className="text-xs text-muted-foreground">
+                  {stayUnit === 'day' ? '일' : stayUnit === 'week' ? '주' : '개월'}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  최대 {maxStayValue}
+                </span>
+              </div>
+            </div>
           )}
         </div>
 
@@ -434,9 +566,9 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                       <div className="flex items-center gap-2">
                         <span 
                           className={`text-xl font-mono ${
-                            patient.currentRisk >= 70 ? 'text-red-500' :
-                            patient.currentRisk >= 50 ? 'text-orange-500' :
-                            patient.currentRisk >= 30 ? 'text-yellow-500' :
+                            patient.currentRisk >= (DEMO_MODE ? 40 : 70) ? 'text-red-500' :
+                            patient.currentRisk >= (DEMO_MODE ? 20 : 50) ? 'text-orange-500' :
+                            patient.currentRisk >= (DEMO_MODE ? 10 : 30) ? 'text-yellow-500' :
                             'text-green-500'
                           }`}
                         >

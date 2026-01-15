@@ -5,13 +5,14 @@ interface RiskBadgeProps {
 }
 
 export function RiskBadge({ alertStatus }: RiskBadgeProps) {
+  const DEMO_MODE = true;
   const variants = {
     'sustained-high': {
-      label: '지속적 고위험',
+      label: DEMO_MODE ? '위험' : '지속적 고위험',
       className: 'bg-red-600 text-white hover:bg-red-600 text-sm tracking-wider border-0',
     },
     'rapid-increase': {
-      label: '급격한 증가',
+      label: DEMO_MODE ? '주의' : '급격한 증가',
       className: 'bg-orange-600 text-white hover:bg-orange-600 text-sm tracking-wider border-0',
     },
     'stale-data': {

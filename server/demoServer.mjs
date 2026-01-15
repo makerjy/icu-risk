@@ -2,11 +2,22 @@ import http from "node:http";
 import { URL } from "node:url";
 
 const PORT = Number(process.env.DEMO_PORT || 4173);
+const DEMO_MODE = String(process.env.DEMO_MODE || "true").toLowerCase() === "true";
+const DEMO_RISK_SCALE = Number(process.env.DEMO_RISK_SCALE || 0.2);
+const DEMO_RISK_MAX = Number(process.env.DEMO_RISK_MAX || 20);
 const INTERVAL_MINUTES = 5;
 const HISTORY_HOURS = 6;
 const HISTORY_POINTS = HISTORY_HOURS * (60 / INTERVAL_MINUTES) + 1;
 const FORECAST_POINTS = 12;
 const FORECAST_INTERVAL_MINUTES = INTERVAL_MINUTES;
+const DEMO_VITAL_RANGES = {
+  hr: [60, 110],
+  sbp: [95, 140],
+  spo2: [92, 100],
+  rr: [12, 24],
+  creatinine: [0.6, 1.8],
+  wbc: [4, 15],
+};
 
 const FEATURE_TEMPLATES = [
   { key: "pco2", name: "pCO2 (Blood Gas)", unit: "mmHg", normalRange: [35, 45], baseValue: 40, variance: 4, min: 25, max: 60, round: 1 },
@@ -110,37 +121,55 @@ const applyRound = (value, round) =>
 
 const ALERT_PROFILES = [
   {
-    currentRisk: 78,
+    currentRisk: 0.3,
+    trend: "stable",
+    alertStatus: "normal",
+    topContributors: ["Age", "SBP", "SpO2"],
+  },
+  {
+    currentRisk: 0.6,
+    trend: "stable",
+    alertStatus: "normal",
+    topContributors: ["Albumin", "RR", "Temp"],
+  },
+  {
+    currentRisk: 0.9,
+    trend: "decreasing",
+    alertStatus: "normal",
+    topContributors: ["Platelet", "GCS", "SpO2"],
+  },
+  {
+    currentRisk: 6,
     trend: "increasing",
     alertStatus: "rapid-increase",
     topContributors: ["BUN ↑", "SpO2 ↓", "Creatinine ↑"],
   },
   {
-    currentRisk: 45,
+    currentRisk: 1.2,
     trend: "stable",
     alertStatus: "normal",
     topContributors: ["Age", "GCS ↓", "RR ↑"],
   },
   {
-    currentRisk: 92,
+    currentRisk: 4,
     trend: "stable",
-    alertStatus: "sustained-high",
-    topContributors: ["SpO2 ↓↓", "pO2 ↓", "SBP ↓"],
+    alertStatus: "normal",
+    topContributors: ["SpO2 ↓", "pO2 ↓", "SBP ↓"],
   },
   {
-    currentRisk: 28,
+    currentRisk: 0.8,
     trend: "decreasing",
     alertStatus: "normal",
     topContributors: ["Albumin ↓", "Age", "Platelets ↓"],
   },
   {
-    currentRisk: 65,
+    currentRisk: 8,
     trend: "stable",
     alertStatus: "stale-data",
     topContributors: ["FiO2 ↑", "pCO2 ↑", "SpO2 ↓"],
   },
   {
-    currentRisk: 55,
+    currentRisk: 3,
     trend: "increasing",
     alertStatus: "normal",
     topContributors: ["INR ↑", "Platelet ↓", "Bilirubin ↑"],
@@ -148,6 +177,20 @@ const ALERT_PROFILES = [
 ];
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+const applyDemoRisk = (value) => {
+  if (!DEMO_MODE) return value;
+  return clamp(value * DEMO_RISK_SCALE, 0, DEMO_RISK_MAX);
+};
+
+const randomNormal = (mean, std) => {
+  let u = 0;
+  let v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  const num = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  return mean + num * std;
+};
 
 const seededRandom = (seed) => {
   const x = Math.sin(seed * 9999) * 10000;
@@ -158,6 +201,17 @@ const randomBetween = (min, max) => min + Math.random() * (max - min);
 
 const buildReading = (template) => {
   let value = template.baseValue + (Math.random() - 0.5) * template.variance;
+  if (DEMO_MODE && DEMO_VITAL_RANGES[template.key]) {
+    const [low, high] = DEMO_VITAL_RANGES[template.key];
+    const mean = (low + high) / 2;
+    const std = (high - low) / 6;
+    value = clamp(randomNormal(mean, std), low, high);
+  } else if (DEMO_MODE && template.normalRange) {
+    const [low, high] = template.normalRange;
+    const mean = (low + high) / 2;
+    const std = (high - low) / 6;
+    value = clamp(randomNormal(mean, std), low, high);
+  }
 
   if (template.discrete) {
     value = Math.round(value);
@@ -207,7 +261,7 @@ const buildRiskHistory = (currentRisk, trend, baseTime) => {
 
     history.push({
       timestamp,
-      risk: clamp(Math.round(risk), 0, 100),
+      risk: Number(clamp(risk, 0, DEMO_MODE ? DEMO_RISK_MAX : 100).toFixed(2)),
     });
   }
 
@@ -229,7 +283,7 @@ const buildForecastHistory = (riskHistory) => {
     const predictedRisk = clamp(
       Math.round(lastPoint.risk + slope * i),
       0,
-      100
+      DEMO_MODE ? DEMO_RISK_MAX : 100
     );
     forecast.push({ timestamp, risk: predictedRisk });
   }
@@ -353,9 +407,19 @@ const createPatient = (index) => {
   const ward = WARDS[index % WARDS.length];
   const department = DEPARTMENTS[index % DEPARTMENTS.length];
   const admissionCause = ADMISSION_CAUSES[index % ADMISSION_CAUSES.length];
+  const lengthOfStayDays =
+    index % 10 < 3
+      ? clamp(Math.round(7 + seededRandom(index + 99) * 23), 7, 30)
+      : clamp(Math.round(1 + seededRandom(index + 99) * 6), 1, 6);
   const baseTime = new Date();
-  const riskJitter = seededRandom(index + 1) * 10;
-  const currentRisk = clamp(Math.round(profile.currentRisk + riskJitter), 5, 98);
+  const riskJitter = (seededRandom(index + 1) - 0.5) * 1.2;
+  const currentRisk = applyDemoRisk(
+    clamp(
+      Number((profile.currentRisk + riskJitter).toFixed(2)),
+      0,
+      DEMO_MODE ? DEMO_RISK_MAX : 100
+    )
+  );
   const age = clamp(Math.round(30 + (seededRandom(index + 7) + 0.5) * 55), 18, 90);
   const sex = seededRandom(index + 11) > 0 ? "M" : "F";
   const medications = buildMedications(baseTime, index);
@@ -366,6 +430,7 @@ const createPatient = (index) => {
     ward,
     department,
     admissionCause,
+    length_of_stay_days: lengthOfStayDays,
     age,
     sex,
     currentRisk,
@@ -394,9 +459,9 @@ const updatePatient = (patient) => {
   const riskHistory = patient.riskHistory;
   const lastRisk = riskHistory[riskHistory.length - 1]?.risk ?? 50;
   const riskNext = clamp(
-    Math.round(lastRisk + randomBetween(-4, 4)),
+    Number((lastRisk + randomBetween(-1.5, 1.5)).toFixed(2)),
     0,
-    100
+    DEMO_MODE ? DEMO_RISK_MAX : 100
   );
   const now = new Date();
 
@@ -405,7 +470,7 @@ const updatePatient = (patient) => {
     riskHistory.shift();
   }
 
-  patient.currentRisk = riskNext;
+  patient.currentRisk = applyDemoRisk(riskNext);
   patient.lastDataUpdate = now;
   patient.imputedDataPercentage = 0;
 

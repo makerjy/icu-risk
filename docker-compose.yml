@@ -10,6 +10,9 @@ services:
       - MODEL_PATH=${MODEL_PATH}
       - MODEL_GEN_PATH=${MODEL_GEN_PATH}
       - MODEL_SCALER_PATH=${MODEL_SCALER_PATH}
+      - DEMO_MODE=${DEMO_MODE}
+      - DEMO_RISK_SCALE=${DEMO_RISK_SCALE}
+      - DEMO_RISK_MAX=${DEMO_RISK_MAX}
     depends_on:
       - db
     restart: unless-stopped

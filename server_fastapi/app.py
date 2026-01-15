@@ -18,6 +18,9 @@ from .model_adapter import ModelAdapter
 INTERVAL_MINUTES = 5
 HISTORY_HOURS = 6
 HISTORY_POINTS = int(HISTORY_HOURS * (60 / INTERVAL_MINUTES) + 1)
+DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
+DEMO_RISK_SCALE = float(os.getenv("DEMO_RISK_SCALE", "0.2"))
+DEMO_RISK_MAX = float(os.getenv("DEMO_RISK_MAX", "20"))
 FORECAST_POINTS = int(os.getenv("FORECAST_POINTS", "12"))
 FORECAST_INTERVAL_MINUTES = int(
     os.getenv("FORECAST_INTERVAL_MINUTES", str(INTERVAL_MINUTES))
@@ -92,6 +95,15 @@ def ensure_tables():
         );
         """
     )
+    db_execute(
+        """
+        CREATE TABLE IF NOT EXISTS patient_stays (
+            patient_id TEXT PRIMARY KEY,
+            length_of_stay_days INTEGER NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """
+    )
 
 
 class AlertRulePayload(BaseModel):
@@ -134,6 +146,23 @@ def isoformat_utc(value: datetime) -> str:
 
 def parse_iso_utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+DEMO_VITAL_RANGES = {
+    "hr": (60, 110),
+    "sbp": (95, 140),
+    "spo2": (92, 100),
+    "rr": (12, 24),
+    "creatinine": (0.6, 1.8),
+    "wbc": (4, 15),
+}
+
+def apply_demo_risk(value: float) -> float:
+    if not DEMO_MODE:
+        return value
+    return clamp(value * DEMO_RISK_SCALE, 0, DEMO_RISK_MAX)
+
+def clamp_risk(value: float) -> float:
+    return clamp(value, 0, DEMO_RISK_MAX if DEMO_MODE else 100)
 
 
 FEATURE_TEMPLATES = [
@@ -239,37 +268,55 @@ def seeded_random(seed: int) -> float:
 
 ALERT_PROFILES = [
     {
-        "current_risk": 78,
+        "current_risk": 0.3,
+        "trend": "stable",
+        "alert_status": "normal",
+        "top_contributors": ["Age", "SBP", "SpO2"],
+    },
+    {
+        "current_risk": 0.6,
+        "trend": "stable",
+        "alert_status": "normal",
+        "top_contributors": ["Albumin", "RR", "Temp"],
+    },
+    {
+        "current_risk": 0.9,
+        "trend": "decreasing",
+        "alert_status": "normal",
+        "top_contributors": ["Platelet", "GCS", "SpO2"],
+    },
+    {
+        "current_risk": 6,
         "trend": "increasing",
         "alert_status": "rapid-increase",
         "top_contributors": ["BUN ↑", "SpO2 ↓", "Creatinine ↑"],
     },
     {
-        "current_risk": 45,
+        "current_risk": 1.2,
         "trend": "stable",
         "alert_status": "normal",
         "top_contributors": ["Age", "GCS ↓", "RR ↑"],
     },
     {
-        "current_risk": 92,
+        "current_risk": 4,
         "trend": "stable",
-        "alert_status": "sustained-high",
-        "top_contributors": ["SpO2 ↓↓", "pO2 ↓", "SBP ↓"],
+        "alert_status": "normal",
+        "top_contributors": ["SpO2 ↓", "pO2 ↓", "SBP ↓"],
     },
     {
-        "current_risk": 28,
+        "current_risk": 0.8,
         "trend": "decreasing",
         "alert_status": "normal",
         "top_contributors": ["Albumin ↓", "Age", "Platelets ↓"],
     },
     {
-        "current_risk": 65,
+        "current_risk": 8,
         "trend": "stable",
         "alert_status": "stale-data",
         "top_contributors": ["FiO2 ↑", "pCO2 ↑", "SpO2 ↓"],
     },
     {
-        "current_risk": 55,
+        "current_risk": 3,
         "trend": "increasing",
         "alert_status": "normal",
         "top_contributors": ["INR ↑", "Platelet ↓", "Bilirubin ↑"],
@@ -347,6 +394,20 @@ def random_between(min_value: float, max_value: float) -> float:
 
 def build_reading(template: dict) -> dict:
     value = template["base_value"] + (random.random() - 0.5) * template["variance"]
+    if DEMO_MODE:
+        key = template.get("key")
+        if key in DEMO_VITAL_RANGES:
+            low, high = DEMO_VITAL_RANGES[key]
+            mean = (low + high) / 2
+            std = (high - low) / 6
+            value = random.gauss(mean, std)
+            value = clamp(value, low, high)
+        elif "normal_range" in template:
+            low, high = template["normal_range"]
+            mean = (low + high) / 2
+            std = (high - low) / 6
+            value = random.gauss(mean, std)
+            value = clamp(value, low, high)
     if template.get("discrete"):
         value = round(value)
     value = clamp(value, template["min"], template["max"])
@@ -380,7 +441,7 @@ def build_risk_history(current_risk: int, trend: str, base_time: datetime) -> Li
             risk = current_risk + (i / 12) * 2.0 + random_between(-2.0, 2.0)
         else:
             risk = current_risk + random_between(-1.5, 1.5)
-        history.append({"timestamp": isoformat_utc(timestamp), "risk": int(clamp(risk, 0, 100))})
+        history.append({"timestamp": isoformat_utc(timestamp), "risk": round(clamp_risk(risk), 2)})
     return history
 
 
@@ -396,11 +457,34 @@ def build_forecast_history(risk_history: List[dict]) -> List[dict]:
         timestamp = last_timestamp + timedelta(
             minutes=FORECAST_INTERVAL_MINUTES * step
         )
-        risk = int(
-            clamp(last_point["risk"] + slope * step, 0, 100)
+        risk = round(
+            clamp_risk(last_point["risk"] + slope * step), 2
         )
         forecast.append({"timestamp": isoformat_utc(timestamp), "risk": risk})
     return forecast
+
+
+def get_or_create_stay_days(patient_id: str, fallback_days: int) -> int:
+    try:
+        rows = db_fetch_all(
+            "SELECT length_of_stay_days FROM patient_stays WHERE patient_id = %s",
+            (patient_id,),
+        )
+        if rows:
+            return int(rows[0]["length_of_stay_days"])
+        db_execute(
+            """
+            INSERT INTO patient_stays (patient_id, length_of_stay_days)
+            VALUES (%s, %s)
+            ON CONFLICT (patient_id) DO UPDATE
+            SET length_of_stay_days = EXCLUDED.length_of_stay_days,
+                updated_at = NOW()
+            """,
+            (patient_id, fallback_days),
+        )
+    except Exception:
+        return fallback_days
+    return fallback_days
 
 
 def build_features(profile_index: int) -> List[dict]:
@@ -567,9 +651,17 @@ def create_patient(index: int) -> dict:
     ward = WARDS[index % len(WARDS)]
     department = DEPARTMENTS[index % len(DEPARTMENTS)]
     admission_cause = ADMISSION_CAUSES[index % len(ADMISSION_CAUSES)]
+    if index % 10 < 3:
+        icu_stay_days = int(clamp(7 + seeded_random(index + 99) * 23, 7, 30))
+    else:
+        icu_stay_days = int(clamp(1 + seeded_random(index + 99) * 6, 1, 6))
+    icu_stay_days = get_or_create_stay_days(str(stay_id), icu_stay_days)
     base_time = now_utc()
-    risk_jitter = seeded_random(index + 1) * 10
-    current_risk = int(clamp(profile["current_risk"] + risk_jitter, 5, 98))
+    risk_jitter = (seeded_random(index + 1)) * 1.2
+    current_risk = round(
+        clamp(profile["current_risk"] + risk_jitter, 0, 25), 2
+    )
+    current_risk = round(apply_demo_risk(current_risk), 2)
     age = int(clamp(30 + (seeded_random(index + 7) + 0.5) * 55, 18, 90))
     sex = "M" if seeded_random(index + 11) > 0 else "F"
     features = build_features(index)
@@ -580,6 +672,7 @@ def create_patient(index: int) -> dict:
         "ward": ward,
         "department": department,
         "admissionCause": admission_cause,
+        "length_of_stay_days": icu_stay_days,
         "age": age,
         "sex": sex,
         "currentRisk": current_risk,
@@ -599,7 +692,9 @@ def create_patient(index: int) -> dict:
     if model_sequence:
         prediction = MODEL.predict(model_sequence)
         if prediction.risk is not None:
-            patient["currentRisk"] = int(clamp(prediction.risk, 0, 100))
+            patient["currentRisk"] = round(
+                clamp_risk(apply_demo_risk(prediction.risk)), 2
+            )
             if patient["riskHistory"]:
                 patient["riskHistory"][-1]["risk"] = patient["currentRisk"]
             patient["predictedRiskHistory"] = build_forecast_history(
@@ -628,16 +723,18 @@ def update_patient(patient: dict) -> None:
     model_sequence = build_model_sequence(patient)
     prediction = MODEL.predict(model_sequence) if model_sequence else MODEL.predict([])
     risk_next = (
-        int(clamp(prediction.risk, 0, 100))
+        round(clamp_risk(apply_demo_risk(prediction.risk)), 2)
         if prediction.risk is not None
-        else int(clamp(last_risk + random_between(-4, 4), 0, 100))
+        else round(
+            clamp_risk(last_risk + random_between(-1.5, 1.5)), 2
+        )
     )
 
     risk_history.append({"timestamp": isoformat_utc(now), "risk": risk_next})
     if len(risk_history) > HISTORY_POINTS:
         risk_history.pop(0)
 
-    patient["currentRisk"] = risk_next
+    patient["currentRisk"] = round(clamp_risk(risk_next), 2)
     patient["lastDataUpdate"] = isoformat_utc(now)
     patient["imputedDataPercentage"] = 0
     patient["predictedRiskHistory"] = build_forecast_history(risk_history)
@@ -654,6 +751,11 @@ async def start_updater() -> None:
     import asyncio
 
     ensure_tables()
+    for patient in PATIENTS:
+        patient["length_of_stay_days"] = get_or_create_stay_days(
+            patient["icuId"],
+            patient.get("length_of_stay_days", 1),
+        )
 
     async def loop() -> None:
         while True:
