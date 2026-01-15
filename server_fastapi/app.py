@@ -18,6 +18,10 @@ from .model_adapter import ModelAdapter
 INTERVAL_MINUTES = 5
 HISTORY_HOURS = 6
 HISTORY_POINTS = int(HISTORY_HOURS * (60 / INTERVAL_MINUTES) + 1)
+FORECAST_POINTS = int(os.getenv("FORECAST_POINTS", "12"))
+FORECAST_INTERVAL_MINUTES = int(
+    os.getenv("FORECAST_INTERVAL_MINUTES", str(INTERVAL_MINUTES))
+)
 
 app = FastAPI(title="ICU Demo API", version="0.1.0")
 
@@ -380,6 +384,25 @@ def build_risk_history(current_risk: int, trend: str, base_time: datetime) -> Li
     return history
 
 
+def build_forecast_history(risk_history: List[dict]) -> List[dict]:
+    if not risk_history:
+        return []
+    recent = risk_history[-min(len(risk_history), 6):]
+    slope = (recent[-1]["risk"] - recent[0]["risk"]) / max(len(recent) - 1, 1)
+    last_point = risk_history[-1]
+    last_timestamp = parse_iso_utc(last_point["timestamp"])
+    forecast = []
+    for step in range(1, FORECAST_POINTS + 1):
+        timestamp = last_timestamp + timedelta(
+            minutes=FORECAST_INTERVAL_MINUTES * step
+        )
+        risk = int(
+            clamp(last_point["risk"] + slope * step, 0, 100)
+        )
+        forecast.append({"timestamp": isoformat_utc(timestamp), "risk": risk})
+    return forecast
+
+
 def build_features(profile_index: int) -> List[dict]:
     base_time = now_utc()
     features: List[dict] = []
@@ -569,6 +592,9 @@ def create_patient(index: int) -> dict:
         "features": features,
         "medications": medications,
     }
+    patient["predictedRiskHistory"] = build_forecast_history(
+        patient["riskHistory"]
+    )
     model_sequence = build_model_sequence(patient)
     if model_sequence:
         prediction = MODEL.predict(model_sequence)
@@ -576,6 +602,9 @@ def create_patient(index: int) -> dict:
             patient["currentRisk"] = int(clamp(prediction.risk, 0, 100))
             if patient["riskHistory"]:
                 patient["riskHistory"][-1]["risk"] = patient["currentRisk"]
+            patient["predictedRiskHistory"] = build_forecast_history(
+                patient["riskHistory"]
+            )
     refresh_contributions(patient)
     patient["outOfRangeAlerts"] = compute_out_of_range_alerts(patient)
     return patient
@@ -611,6 +640,7 @@ def update_patient(patient: dict) -> None:
     patient["currentRisk"] = risk_next
     patient["lastDataUpdate"] = isoformat_utc(now)
     patient["imputedDataPercentage"] = 0
+    patient["predictedRiskHistory"] = build_forecast_history(risk_history)
 
     thirty_min_index = max(len(risk_history) - 7, 0)
     past_risk = risk_history[thirty_min_index]["risk"] if risk_history else risk_next

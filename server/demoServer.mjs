@@ -5,6 +5,8 @@ const PORT = Number(process.env.DEMO_PORT || 4173);
 const INTERVAL_MINUTES = 5;
 const HISTORY_HOURS = 6;
 const HISTORY_POINTS = HISTORY_HOURS * (60 / INTERVAL_MINUTES) + 1;
+const FORECAST_POINTS = 12;
+const FORECAST_INTERVAL_MINUTES = INTERVAL_MINUTES;
 
 const FEATURE_TEMPLATES = [
   { key: "pco2", name: "pCO2 (Blood Gas)", unit: "mmHg", normalRange: [35, 45], baseValue: 40, variance: 4, min: 25, max: 60, round: 1 },
@@ -212,6 +214,28 @@ const buildRiskHistory = (currentRisk, trend, baseTime) => {
   return history;
 };
 
+const buildForecastHistory = (riskHistory) => {
+  if (!riskHistory.length) return [];
+  const recent = riskHistory.slice(-Math.min(riskHistory.length, 6));
+  const slope =
+    (recent[recent.length - 1].risk - recent[0].risk) /
+    Math.max(recent.length - 1, 1);
+  const lastPoint = riskHistory[riskHistory.length - 1];
+  const forecast = [];
+  for (let i = 1; i <= FORECAST_POINTS; i += 1) {
+    const timestamp = new Date(
+      lastPoint.timestamp.getTime() + i * FORECAST_INTERVAL_MINUTES * 60 * 1000
+    );
+    const predictedRisk = clamp(
+      Math.round(lastPoint.risk + slope * i),
+      0,
+      100
+    );
+    forecast.push({ timestamp, risk: predictedRisk });
+  }
+  return forecast;
+};
+
 const buildFeatures = () => {
   const baseTime = new Date();
 
@@ -355,6 +379,7 @@ const createPatient = (index) => {
     medications,
   };
 
+  patient.predictedRiskHistory = buildForecastHistory(patient.riskHistory);
   patient.outOfRangeAlerts = computeOutOfRangeAlerts(patient);
   return patient;
 };
@@ -399,6 +424,7 @@ const updatePatient = (patient) => {
 
   refreshContributions(patient);
   patient.outOfRangeAlerts = computeOutOfRangeAlerts(patient);
+  patient.predictedRiskHistory = buildForecastHistory(patient.riskHistory);
 
   const thirtyMinIndex = Math.max(riskHistory.length - 7, 0);
   const pastRisk = riskHistory[thirtyMinIndex]?.risk ?? riskNext;

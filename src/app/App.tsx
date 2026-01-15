@@ -72,13 +72,28 @@ function AppContent() {
     const rulesToUse = patient.alertRules ?? rules;
     let rapidRuleTriggered = false;
     let sustainedRuleTriggered = false;
+    const predictedHistory = patient.predictedRiskHistory ?? [];
+    const predictedMax =
+      predictedHistory.length > 0
+        ? Math.max(...predictedHistory.map((point) => point.risk))
+        : patient.currentRisk;
+    const predictedLast =
+      predictedHistory.length > 0
+        ? predictedHistory[predictedHistory.length - 1].risk
+        : patient.currentRisk;
+    const forecastedChange = Math.round(
+      predictedLast - patient.currentRisk
+    );
 
     rulesToUse.forEach((rule) => {
       if (!rule.enabled) return;
       if (rule.rateOfChangeThreshold > 0) {
-        const change = patient.changeInLast30Min;
+        const change =
+          predictedHistory.length > 0
+            ? forecastedChange
+            : patient.changeInLast30Min;
         if (
-          patient.currentRisk >= rule.riskThreshold &&
+          predictedMax >= rule.riskThreshold &&
           change >= rule.rateOfChangeThreshold
         ) {
           rapidRuleTriggered = true;
@@ -87,7 +102,10 @@ function AppContent() {
 
       if (rule.sustainedDuration > 0) {
         const windowStart = now - rule.sustainedDuration * 60 * 1000;
-        const windowPoints = patient.riskHistory.filter(
+        const windowPoints = [
+          ...patient.riskHistory,
+          ...predictedHistory,
+        ].filter(
           (point) => point.timestamp.getTime() >= windowStart
         );
         if (
@@ -243,6 +261,12 @@ function AppContent() {
           ...patient,
           lastDataUpdate: new Date(patient.lastDataUpdate),
           riskHistory: patient.riskHistory.map((point) => ({
+            ...point,
+            timestamp: new Date(point.timestamp),
+          })),
+          predictedRiskHistory: (
+            patient.predictedRiskHistory ?? []
+          ).map((point) => ({
             ...point,
             timestamp: new Date(point.timestamp),
           })),

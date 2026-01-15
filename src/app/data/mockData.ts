@@ -56,6 +56,7 @@ export interface Patient {
   sex: 'F' | 'M';
   currentRisk: number; // 0-100
   riskHistory: RiskDataPoint[];
+  predictedRiskHistory?: RiskDataPoint[];
   changeInLast30Min: number; // percentage points
   lastDataUpdate: Date;
   imputedDataPercentage: number; // 0-100
@@ -147,6 +148,31 @@ function generateRiskHistory(
   }
 
   return history;
+}
+
+function generateForecastHistory(
+  history: RiskDataPoint[],
+  points: number
+): RiskDataPoint[] {
+  if (history.length === 0) return [];
+  const recent = history.slice(-Math.min(history.length, 6));
+  const slope =
+    (recent[recent.length - 1].risk - recent[0].risk) /
+    Math.max(recent.length - 1, 1);
+  const lastPoint = history[history.length - 1];
+  const intervalMs = 5 * 60 * 1000;
+  const forecast: RiskDataPoint[] = [];
+
+  for (let i = 1; i <= points; i += 1) {
+    const timestamp = new Date(lastPoint.timestamp.getTime() + i * intervalMs);
+    const risk = Math.max(
+      0,
+      Math.min(100, Math.round(lastPoint.risk + slope * i))
+    );
+    forecast.push({ timestamp, risk });
+  }
+
+  return forecast;
 }
 
 type FeatureTemplate = {
@@ -417,6 +443,7 @@ function createPatient(index: number): Patient {
   const features = buildFeatures(index);
   const outOfRangeAlerts = buildOutOfRangeAlerts(features);
 
+  const riskHistory = generateRiskHistory(currentRisk, 6, profile.trend);
   return {
     icuId: String(stayId),
     bedNumber,
@@ -426,7 +453,8 @@ function createPatient(index: number): Patient {
     age,
     sex,
     currentRisk,
-    riskHistory: generateRiskHistory(currentRisk, 6, profile.trend),
+    riskHistory,
+    predictedRiskHistory: generateForecastHistory(riskHistory, 12),
     changeInLast30Min,
     lastDataUpdate: new Date(Date.now() - minutesAgo * 60 * 1000),
     imputedDataPercentage: profile.imputedDataPercentage,

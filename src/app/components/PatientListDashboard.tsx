@@ -184,6 +184,7 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
   const alertFeedItems = useMemo(() => {
     const items: {
       id: string;
+      patientId: string;
       timestamp: Date;
       title: string;
       detail: string;
@@ -201,6 +202,7 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
       if (patient.alertStatus !== 'normal') {
         items.push({
           id: `${patient.icuId}-risk`,
+          patientId: patient.icuId,
           timestamp: patient.lastDataUpdate,
           title: statusToLabel(patient.alertStatus),
           detail: `${formatBedLabel(patient.bedNumber, patient.ward)} · ${patient.currentRisk}%`,
@@ -212,10 +214,11 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
               : 'low',
         });
       }
-      patient.outOfRangeAlerts.forEach((alert) => {
+      (patient.outOfRangeAlerts ?? []).forEach((alert) => {
         const directionLabel = alert.direction === 'high' ? '상승' : '하강';
         items.push({
           id: `${patient.icuId}-${alert.key}`,
+          patientId: patient.icuId,
           timestamp: alert.timestamp,
           title: `정상범위 이탈 · ${alert.name}`,
           detail: `${formatBedLabel(patient.bedNumber, patient.ward)} · ${alert.value.toFixed(1)} ${alert.unit} (${directionLabel})`,
@@ -227,6 +230,17 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
     items.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
     return items.slice(0, 8);
   }, [patients]);
+
+  const activeAlertCount = useMemo(() => {
+    const riskAlerts = sortedAndFilteredPatients.filter(
+      (patient) => patient.alertStatus !== 'normal'
+    ).length;
+    const outOfRangeAlerts = sortedAndFilteredPatients.reduce(
+      (acc, patient) => acc + (patient.outOfRangeAlerts?.length ?? 0),
+      0
+    );
+    return riskAlerts + outOfRangeAlerts;
+  }, [sortedAndFilteredPatients]);
 
   return (
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_320px]">
@@ -257,7 +271,7 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
               </select>
             </div>
             <div>전체 환자: {sortedAndFilteredPatients.length}명</div>
-            <div>활성 알림: {sortedAndFilteredPatients.filter(p => p.alertStatus !== 'normal').length}건</div>
+          <div>활성 알림: {activeAlertCount}건</div>
           </div>
         </div>
 
@@ -545,7 +559,12 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
           ) : (
             <div className="grid grid-cols-1 gap-3">
               {alertFeedItems.map((item) => (
-                <div key={item.id} className="rounded-md border border-border bg-muted/40 p-3">
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onSelectPatient(item.patientId)}
+                  className="rounded-md border border-border bg-muted/40 p-3 text-left transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   <div className="flex items-center justify-between">
                     <div className="text-sm font-medium">{item.title}</div>
                     <div
@@ -566,7 +585,7 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                   <div className="text-xs text-muted-foreground mt-1">
                     {formatDistanceToNow(item.timestamp, { addSuffix: true, locale: ko })}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           )}

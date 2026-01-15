@@ -40,12 +40,31 @@ export function PatientDetailView({
       timeLabel: format(new Date(ts), 'HH:mm'),
       timestamp: ts,
       risk: point.risk,
+      predictedRisk: undefined as number | undefined,
       medMarker: undefined as number | undefined,
       medLabels: [] as string[],
     };
   });
 
   const riskChartWithMeds = [...riskChartData];
+  const predictedHistory = patient.predictedRiskHistory ?? [];
+  if (predictedHistory.length > 0) {
+    const actualPoints = riskChartWithMeds.length;
+    predictedHistory.forEach((point, idx) => {
+      const ts = point.timestamp instanceof Date
+        ? point.timestamp.getTime()
+        : new Date(point.timestamp).getTime();
+      riskChartWithMeds.push({
+        index: actualPoints - 1 + idx + 1,
+        timeLabel: format(new Date(ts), 'HH:mm'),
+        timestamp: ts,
+        risk: undefined,
+        predictedRisk: point.risk,
+        medMarker: undefined,
+        medLabels: [],
+      });
+    });
+  }
   const timeLabelByIndex = new Map<number, string>(
     riskChartWithMeds.map((point) => [point.index, point.timeLabel])
   );
@@ -170,6 +189,16 @@ export function PatientDetailView({
             <h2 className="text-xl">사망 위험도 추이</h2>
             <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
               <span>최근 6시간</span>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="inline-flex items-center gap-1 text-red-400">
+                  <span className="h-0.5 w-4 bg-red-400" />
+                  현재 위험도
+                </span>
+                <span className="inline-flex items-center gap-1 text-orange-400">
+                  <span className="h-0.5 w-4 border-t-2 border-dashed border-orange-400" />
+                  예측 위험도
+                </span>
+              </div>
               <div className="flex items-center gap-2 text-sky-300">
                 <span className="inline-block h-3 w-px bg-sky-400" />
                 <span>투약 타임스탬프</span>
@@ -211,6 +240,10 @@ export function PatientDetailView({
                 <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
                 <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
               </linearGradient>
+              <linearGradient id="forecastGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#f97316" stopOpacity={0.22}/>
+                <stop offset="95%" stopColor="#f97316" stopOpacity={0}/>
+              </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
             <XAxis 
@@ -235,15 +268,19 @@ export function PatientDetailView({
               content={({ active, payload, label }) => {
                 if (!active || !payload || payload.length === 0) return null;
                 const point = payload[0]?.payload as any;
-                const riskValue = point?.risk;
+                const riskValue = point?.risk ?? point?.predictedRisk;
                 const meds = point?.medLabels ?? [];
+                const isForecast = point?.risk === undefined;
                 return (
                   <div className="rounded-md border border-border bg-card px-3 py-2 text-xs text-card-foreground shadow-sm">
                     <div className="text-sm font-medium">
                       {timeLabelByIndex.get(label) ?? ''}
                     </div>
                     <div className="mt-1 text-muted-foreground">
-                      위험도: <span className="font-mono text-foreground">{Number(riskValue).toFixed(1)}%</span>
+                      위험도{isForecast ? ' (예측)' : ''}:{' '}
+                      <span className="font-mono text-foreground">
+                        {Number(riskValue).toFixed(1)}%
+                      </span>
                     </div>
                     {meds.length > 0 && (
                       <div className="mt-2">
@@ -266,6 +303,16 @@ export function PatientDetailView({
               stroke="#ef4444" 
               strokeWidth={3}
               fill="url(#riskGradient)"
+            />
+            <Area
+              type="monotone"
+              dataKey="predictedRisk"
+              stroke="#f97316"
+              strokeWidth={2}
+              strokeDasharray="6 6"
+              fill="url(#forecastGradient)"
+              fillOpacity={1}
+              dot={false}
             />
             {[...medLineIndices].map((index) => (
               <ReferenceArea
