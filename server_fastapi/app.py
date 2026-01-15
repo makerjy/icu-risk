@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import asyncio
+import json
 import os
 import random
 from typing import Dict, List, Tuple
 
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import psycopg2
 import psycopg2.extras
@@ -769,3 +772,23 @@ def create_alert_log(payload: AlertLogPayload) -> dict:
 @app.get("/api/feature-order")
 def get_feature_order() -> List[str]:
     return FEATURE_ORDER
+
+
+@app.get("/api/stream/patients")
+async def stream_patients():
+    async def event_generator():
+        while True:
+            payload = json.dumps(PATIENTS, ensure_ascii=False)
+            yield f"data: {payload}\n\n"
+            await asyncio.sleep(2)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers=headers,
+    )

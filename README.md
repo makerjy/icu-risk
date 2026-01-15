@@ -142,6 +142,46 @@ docker compose restart
 
 ---
 
+## 운영 업데이트 (로컬 -> VM 배포)
+로컬 변경사항을 VM에 반영하는 흐름입니다.
+
+### 1) 로컬 변경사항 전송
+rsync 사용 예시:
+```bash
+rsync -avz --delete --exclude node_modules --exclude .venv --exclude dist \
+  -e "ssh -i /path/to/instance-team6.key" \
+  ./ opc@서버IP:~/icu-risk/
+```
+
+### 2) VM에서 빌드 및 반영
+프론트 변경 시:
+```bash
+cd ~/icu-risk
+npm install
+npm run build
+sudo docker compose restart web
+```
+
+백엔드 변경 시:
+```bash
+cd ~/icu-risk
+sudo docker compose up -d --build api
+```
+
+환경변수/설정 변경 시:
+```bash
+cd ~/icu-risk
+sudo docker compose up -d
+```
+
+### 3) 상태 확인
+```bash
+sudo docker compose ps
+curl http://서버IP:8000/api/status
+```
+
+---
+
 ## API 빠른 확인
 ```bash
 curl http://localhost:8000/api/status

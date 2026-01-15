@@ -320,34 +320,52 @@ function AppContent() {
       }
     };
 
-    const fetchPatients = async () => {
-      try {
-        const response = await fetch("/api/patients", {
-          cache: "no-store",
-        });
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        const data = (await response.json()) as Patient[];
-        if (isMounted) {
+    let eventSource: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+
+    const connectStream = () => {
+      if (!isMounted) return;
+      eventSource = new EventSource("/api/stream/patients");
+
+      eventSource.onmessage = (event) => {
+        if (!isMounted) return;
+        try {
+          const data = JSON.parse(event.data) as Patient[];
           const revived = revivePatients(data);
           logAlertTransitions(revived);
           setPatients(revived);
           setLiveStatus("live");
-        }
-      } catch (error) {
-        if (isMounted) {
+        } catch {
           setLiveStatus("error");
         }
-      }
+      };
+
+      eventSource.onerror = () => {
+        if (!isMounted) return;
+        setLiveStatus("error");
+        eventSource?.close();
+        eventSource = null;
+        if (reconnectTimer === null) {
+          reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null;
+            connectStream();
+          }, 3000);
+        }
+      };
     };
 
-    fetchPatients();
-    const interval = window.setInterval(fetchPatients, 5000);
+    if (typeof EventSource !== "undefined") {
+      connectStream();
+    } else {
+      setLiveStatus("error");
+    }
 
     return () => {
       isMounted = false;
-      window.clearInterval(interval);
+      eventSource?.close();
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+      }
     };
   }, [alertRules, patientAlertRulesMap]);
 
