@@ -194,6 +194,38 @@ DEPARTMENTS = [
     "노인내과",
 ]
 
+ADMISSION_CAUSES = [
+    "패혈증",
+    "급성 호흡부전",
+    "심근경색",
+    "뇌졸중",
+    "다발성 외상",
+    "폐렴",
+    "급성 신손상",
+    "복부 수술 후 모니터링",
+    "위장관 출혈",
+    "중증 간부전",
+]
+
+MEDICATION_LIBRARY = [
+    {"name": "Norepinephrine", "dose": "0.08 mcg/kg/min", "route": "IV"},
+    {"name": "Vasopressin", "dose": "0.03 units/min", "route": "IV"},
+    {"name": "Vancomycin", "dose": "1 g", "route": "IV"},
+    {"name": "Meropenem", "dose": "1 g", "route": "IV"},
+    {"name": "Ceftriaxone", "dose": "2 g", "route": "IV"},
+    {"name": "Furosemide", "dose": "20 mg", "route": "IV"},
+    {"name": "Heparin", "dose": "5,000 units", "route": "SC"},
+    {"name": "Propofol", "dose": "25 mcg/kg/min", "route": "IV"},
+    {"name": "Insulin", "dose": "4 units", "route": "IV"},
+    {"name": "Dexamethasone", "dose": "6 mg", "route": "IV"},
+    {"name": "Midazolam", "dose": "2 mg", "route": "IV"},
+    {"name": "Fentanyl", "dose": "50 mcg", "route": "IV"},
+    {"name": "Pantoprazole", "dose": "40 mg", "route": "IV"},
+    {"name": "Acetaminophen", "dose": "650 mg", "route": "PO"},
+    {"name": "Albuterol", "dose": "2.5 mg", "route": "NEB"},
+    {"name": "Rocuronium", "dose": "50 mg", "route": "IV"},
+]
+
 def seeded_random(seed: int) -> float:
     value = random.Random(seed).random()
     return value - 0.5
@@ -364,6 +396,51 @@ def build_features(profile_index: int) -> List[dict]:
     return features
 
 
+def build_medications(base_time: datetime, seed: int) -> List[dict]:
+    rng = random.Random(seed + 101)
+    count = 3 + rng.randint(0, 4)
+    medications = []
+    for idx in range(count):
+        med = MEDICATION_LIBRARY[(seed + idx * 3) % len(MEDICATION_LIBRARY)]
+        minutes_ago = 20 + idx * 55 + ((seed + idx * 11) % 20)
+        timestamp = base_time - timedelta(minutes=minutes_ago)
+        medications.append(
+            {
+                "name": med["name"],
+                "dose": med["dose"],
+                "route": med["route"],
+                "timestamp": isoformat_utc(timestamp),
+            }
+        )
+    return sorted(medications, key=lambda item: item["timestamp"])
+
+
+def compute_out_of_range_alerts(patient: dict) -> List[dict]:
+    alerts: List[dict] = []
+    for feature in patient.get("features", []):
+        readings = feature.get("readings") or []
+        if not readings:
+            continue
+        latest = readings[-1]
+        low, high = feature.get("normalRange", [None, None])
+        if low is None or high is None:
+            continue
+        value = float(latest.get("value", 0))
+        if value < low or value > high:
+            alerts.append(
+                {
+                    "key": feature.get("key"),
+                    "name": feature.get("name"),
+                    "value": value,
+                    "unit": feature.get("unit"),
+                    "normalRange": [low, high],
+                    "timestamp": latest.get("timestamp"),
+                    "direction": "low" if value < low else "high",
+                }
+            )
+    return alerts
+
+
 def build_model_sequence(patient: dict) -> List[List[float]]:
     features = patient.get("features", [])
     if not features:
@@ -463,17 +540,20 @@ def create_patient(index: int) -> dict:
     bed_number = f"MIMIC4-ICU-{stay_id}"
     ward = WARDS[index % len(WARDS)]
     department = DEPARTMENTS[index % len(DEPARTMENTS)]
+    admission_cause = ADMISSION_CAUSES[index % len(ADMISSION_CAUSES)]
     base_time = now_utc()
     risk_jitter = seeded_random(index + 1) * 10
     current_risk = int(clamp(profile["current_risk"] + risk_jitter, 5, 98))
     age = int(clamp(30 + (seeded_random(index + 7) + 0.5) * 55, 18, 90))
     sex = "M" if seeded_random(index + 11) > 0 else "F"
     features = build_features(index)
+    medications = build_medications(base_time, index)
     patient = {
         "icuId": str(stay_id),
         "bedNumber": bed_number,
         "ward": ward,
         "department": department,
+        "admissionCause": admission_cause,
         "age": age,
         "sex": sex,
         "currentRisk": current_risk,
@@ -484,6 +564,7 @@ def create_patient(index: int) -> dict:
         "topContributors": profile["top_contributors"],
         "alertStatus": profile["alert_status"],
         "features": features,
+        "medications": medications,
     }
     model_sequence = build_model_sequence(patient)
     if model_sequence:
@@ -493,6 +574,7 @@ def create_patient(index: int) -> dict:
             if patient["riskHistory"]:
                 patient["riskHistory"][-1]["risk"] = patient["currentRisk"]
     refresh_contributions(patient)
+    patient["outOfRangeAlerts"] = compute_out_of_range_alerts(patient)
     return patient
 
 
@@ -531,6 +613,7 @@ def update_patient(patient: dict) -> None:
     past_risk = risk_history[thirty_min_index]["risk"] if risk_history else risk_next
     patient["changeInLast30Min"] = int(risk_next - past_risk)
     refresh_contributions(patient)
+    patient["outOfRangeAlerts"] = compute_out_of_range_alerts(patient)
 
 
 @app.on_event("startup")

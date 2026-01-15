@@ -6,6 +6,23 @@ export interface VitalReading {
   isImputed: boolean;
 }
 
+export interface MedicationAdministration {
+  name: string;
+  timestamp: Date;
+  dose?: string;
+  route?: string;
+}
+
+export interface OutOfRangeAlert {
+  key: string;
+  name: string;
+  value: number;
+  unit: string;
+  normalRange: [number, number];
+  timestamp: Date;
+  direction: 'low' | 'high';
+}
+
 export interface AlertRule {
   id: string;
   name: string;
@@ -34,6 +51,7 @@ export interface Patient {
   bedNumber: string;
   ward: string;
   department: string;
+  admissionCause: string;
   age: number;
   sex: 'F' | 'M';
   currentRisk: number; // 0-100
@@ -45,6 +63,8 @@ export interface Patient {
   alertStatus: 'sustained-high' | 'rapid-increase' | 'stale-data' | 'normal';
   alertRules?: AlertRule[];
   features: Feature[];
+  medications: MedicationAdministration[];
+  outOfRangeAlerts: OutOfRangeAlert[];
 }
 
 // Generate mock vital readings
@@ -259,6 +279,38 @@ const ALERT_PROFILES = [
   },
 ];
 
+const ADMISSION_CAUSES = [
+  '패혈증',
+  '급성 호흡부전',
+  '심근경색',
+  '뇌졸중',
+  '다발성 외상',
+  '폐렴',
+  '급성 신손상',
+  '복부 수술 후 모니터링',
+  '위장관 출혈',
+  '중증 간부전',
+];
+
+const MEDICATION_LIBRARY = [
+  { name: 'Norepinephrine', dose: '0.08 mcg/kg/min', route: 'IV' },
+  { name: 'Vasopressin', dose: '0.03 units/min', route: 'IV' },
+  { name: 'Vancomycin', dose: '1 g', route: 'IV' },
+  { name: 'Meropenem', dose: '1 g', route: 'IV' },
+  { name: 'Ceftriaxone', dose: '2 g', route: 'IV' },
+  { name: 'Furosemide', dose: '20 mg', route: 'IV' },
+  { name: 'Heparin', dose: '5,000 units', route: 'SC' },
+  { name: 'Propofol', dose: '25 mcg/kg/min', route: 'IV' },
+  { name: 'Insulin', dose: '4 units', route: 'IV' },
+  { name: 'Dexamethasone', dose: '6 mg', route: 'IV' },
+  { name: 'Midazolam', dose: '2 mg', route: 'IV' },
+  { name: 'Fentanyl', dose: '50 mcg', route: 'IV' },
+  { name: 'Pantoprazole', dose: '40 mg', route: 'IV' },
+  { name: 'Acetaminophen', dose: '650 mg', route: 'PO' },
+  { name: 'Albuterol', dose: '2.5 mg', route: 'NEB' },
+  { name: 'Rocuronium', dose: '50 mg', route: 'IV' },
+];
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -294,12 +346,56 @@ function buildFeatures(profileIndex: number): Feature[] {
   });
 }
 
+function buildMedications(baseTime: Date, index: number): MedicationAdministration[] {
+  const count = 3 + Math.floor(seededRandom(index + 101) * 5);
+  const meds: MedicationAdministration[] = [];
+
+  for (let i = 0; i < count; i += 1) {
+    const med = MEDICATION_LIBRARY[(index + i * 3) % MEDICATION_LIBRARY.length];
+    const minutesAgo = 20 + i * 55 + ((index + i * 11) % 20);
+    meds.push({
+      name: med.name,
+      dose: med.dose,
+      route: med.route,
+      timestamp: new Date(baseTime.getTime() - minutesAgo * 60 * 1000),
+    });
+  }
+
+  return meds.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+}
+
+function buildOutOfRangeAlerts(features: Feature[]): OutOfRangeAlert[] {
+  const alerts: OutOfRangeAlert[] = [];
+
+  features.forEach((feature) => {
+    const lastReading = feature.readings[feature.readings.length - 1];
+    if (!lastReading) {
+      return;
+    }
+    const [low, high] = feature.normalRange;
+    if (lastReading.value < low || lastReading.value > high) {
+      alerts.push({
+        key: feature.key,
+        name: feature.name,
+        value: lastReading.value,
+        unit: feature.unit,
+        normalRange: feature.normalRange,
+        timestamp: lastReading.timestamp,
+        direction: lastReading.value < low ? 'low' : 'high',
+      });
+    }
+  });
+
+  return alerts;
+}
+
 function createPatient(index: number): Patient {
   const profile = ALERT_PROFILES[index % ALERT_PROFILES.length];
   const stayId =  + index * 17 + 25;
   const bedNumber = `ICU-${stayId}`;
   const ward = WARDS[index % WARDS.length];
   const department = DEPARTMENTS[index % DEPARTMENTS.length];
+  const admissionCause = ADMISSION_CAUSES[index % ADMISSION_CAUSES.length];
   const minutesAgoOptions = [2, 3, 5, 7, 12, 25];
   const minutesAgo = minutesAgoOptions[index % minutesAgoOptions.length];
   const riskJitter = (seededRandom(index + 1) - 0.5) * 22;
@@ -316,12 +412,17 @@ function createPatient(index: number): Patient {
     90
   );
   const sex: 'F' | 'M' = seededRandom(index + 11) > 0.48 ? 'M' : 'F';
+  const baseTime = new Date();
+  const medications = buildMedications(baseTime, index);
+  const features = buildFeatures(index);
+  const outOfRangeAlerts = buildOutOfRangeAlerts(features);
 
   return {
     icuId: String(stayId),
     bedNumber,
     ward,
     department,
+    admissionCause,
     age,
     sex,
     currentRisk,
@@ -331,7 +432,9 @@ function createPatient(index: number): Patient {
     imputedDataPercentage: profile.imputedDataPercentage,
     topContributors: profile.topContributors,
     alertStatus: profile.alertStatus,
-    features: buildFeatures(index),
+    features,
+    medications,
+    outOfRangeAlerts,
   };
 }
 

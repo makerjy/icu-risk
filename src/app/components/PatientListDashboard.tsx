@@ -181,85 +181,133 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
     return Math.round(value).toString();
   };
 
+  const alertFeedItems = useMemo(() => {
+    const items: {
+      id: string;
+      timestamp: Date;
+      title: string;
+      detail: string;
+      severity: 'high' | 'medium' | 'low';
+    }[] = [];
+
+    const statusToLabel = (status: Patient['alertStatus']) => {
+      if (status === 'rapid-increase') return '급격한 증가';
+      if (status === 'sustained-high') return '지속적 고위험';
+      if (status === 'stale-data') return '데이터 지연';
+      return '정상';
+    };
+
+    patients.forEach((patient) => {
+      if (patient.alertStatus !== 'normal') {
+        items.push({
+          id: `${patient.icuId}-risk`,
+          timestamp: patient.lastDataUpdate,
+          title: statusToLabel(patient.alertStatus),
+          detail: `${formatBedLabel(patient.bedNumber, patient.ward)} · ${patient.currentRisk}%`,
+          severity:
+            patient.alertStatus === 'sustained-high'
+              ? 'high'
+              : patient.alertStatus === 'rapid-increase'
+              ? 'medium'
+              : 'low',
+        });
+      }
+      patient.outOfRangeAlerts.forEach((alert) => {
+        const directionLabel = alert.direction === 'high' ? '상승' : '하강';
+        items.push({
+          id: `${patient.icuId}-${alert.key}`,
+          timestamp: alert.timestamp,
+          title: `정상범위 이탈 · ${alert.name}`,
+          detail: `${formatBedLabel(patient.bedNumber, patient.ward)} · ${alert.value.toFixed(1)} ${alert.unit} (${directionLabel})`,
+          severity: 'medium',
+        });
+      });
+    });
+
+    items.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    return items.slice(0, 8);
+  }, [patients]);
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl tracking-tight">
-            {selectedWard === '전체'
-              ? '위험도 대시보드'
-              : `${extractWardCode(selectedWard)} 위험도 대시보드`}
-          </h1>
-          <p className="text-muted-foreground mt-1">실시간 사망 위험도 모니터링 · 임상 의사결정 지원</p>
-        </div>
-        <div className="text-right text-sm text-muted-foreground space-y-2">
-          <div className="flex items-center justify-end gap-2">
-            <span className="text-xs">병동</span>
-            <select
-              value={selectedWard}
-              onChange={(event) => setSelectedWard(event.target.value)}
-              className="h-8 rounded-md border border-border bg-card px-2 text-xs text-foreground"
-            >
-              {wardOptions.map((ward) => (
-                <option key={ward} value={ward}>
-                  {ward === '전체' ? '전체' : extractWardCode(ward)}
-                </option>
-              ))}
-            </select>
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_320px]">
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl tracking-tight">
+              {selectedWard === '전체'
+                ? '위험도 대시보드'
+                : `${extractWardCode(selectedWard)} 위험도 대시보드`}
+            </h1>
+            <p className="text-muted-foreground mt-1">실시간 사망 위험도 모니터링 · 임상 의사결정 지원</p>
           </div>
-          <div>전체 환자: {sortedAndFilteredPatients.length}명</div>
-          <div>활성 알림: {sortedAndFilteredPatients.filter(p => p.alertStatus !== 'normal').length}건</div>
+          <div className="text-right text-sm text-muted-foreground space-y-2">
+            <div className="flex items-center justify-end gap-2">
+              <span className="text-xs">병동</span>
+              <select
+                value={selectedWard}
+                onChange={(event) => setSelectedWard(event.target.value)}
+                className="h-8 rounded-md border border-border bg-card px-2 text-xs text-foreground"
+              >
+                {wardOptions.map((ward) => (
+                  <option key={ward} value={ward}>
+                    {ward === '전체' ? '전체' : extractWardCode(ward)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>전체 환자: {sortedAndFilteredPatients.length}명</div>
+            <div>활성 알림: {sortedAndFilteredPatients.filter(p => p.alertStatus !== 'normal').length}건</div>
+          </div>
         </div>
-      </div>
 
-      {/* Filters */}
-      <div className="flex gap-3 items-center p-4 bg-card rounded-lg border border-border">
-        <Filter className="h-5 w-5 text-muted-foreground" />
-        <span className="text-sm text-muted-foreground">필터:</span>
-        <Button
-          variant={filterRapidIncrease ? "default" : "outline"}
-          size="sm"
-          onClick={() => setFilterRapidIncrease(!filterRapidIncrease)}
-          className={filterRapidIncrease ? "bg-orange-600 hover:bg-orange-700" : ""}
-        >
-          급격한 증가
-        </Button>
-        <Button
-          variant={filterHighRisk ? "default" : "outline"}
-          size="sm"
-          onClick={() => setFilterHighRisk(!filterHighRisk)}
-          className={filterHighRisk ? "bg-red-600 hover:bg-red-700" : ""}
-        >
-          지속적 고위험
-        </Button>
-        <Button
-          variant={filterStaleData ? "default" : "outline"}
-          size="sm"
-          onClick={() => setFilterStaleData(!filterStaleData)}
-          className={filterStaleData ? "bg-gray-600 hover:bg-gray-700" : ""}
-        >
-          데이터 지연
-        </Button>
-        {(filterRapidIncrease || filterHighRisk || filterStaleData) && (
+        {/* Filters */}
+        <div className="flex gap-3 items-center p-4 bg-card rounded-lg border border-border">
+          <Filter className="h-5 w-5 text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">필터:</span>
           <Button
-            variant="ghost"
+            variant={filterRapidIncrease ? "default" : "outline"}
             size="sm"
-            onClick={() => {
-              setFilterRapidIncrease(false);
-              setFilterHighRisk(false);
-              setFilterStaleData(false);
-            }}
+            onClick={() => setFilterRapidIncrease(!filterRapidIncrease)}
+            className={filterRapidIncrease ? "bg-orange-600 hover:bg-orange-700" : ""}
           >
-            전체 보기
+            급격한 증가
           </Button>
-        )}
-      </div>
+          <Button
+            variant={filterHighRisk ? "default" : "outline"}
+            size="sm"
+            onClick={() => setFilterHighRisk(!filterHighRisk)}
+            className={filterHighRisk ? "bg-red-600 hover:bg-red-700" : ""}
+          >
+            지속적 고위험
+          </Button>
+          <Button
+            variant={filterStaleData ? "default" : "outline"}
+            size="sm"
+            onClick={() => setFilterStaleData(!filterStaleData)}
+            className={filterStaleData ? "bg-gray-600 hover:bg-gray-700" : ""}
+          >
+            데이터 지연
+          </Button>
+          {(filterRapidIncrease || filterHighRisk || filterStaleData) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setFilterRapidIncrease(false);
+                setFilterHighRisk(false);
+                setFilterStaleData(false);
+              }}
+            >
+              전체 보기
+            </Button>
+          )}
+        </div>
 
-      {/* Patient Table */}
-      <div className="rounded-lg border border-border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+        {/* Patient Table */}
+        <div className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted">
                 <th className="px-2 py-3 text-left">
@@ -278,6 +326,9 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                 </th>
                 <th className="px-2 py-3 text-left">
                   <span className="text-xs text-muted-foreground px-2">담당 병과</span>
+                </th>
+                <th className="px-2 py-3 text-left">
+                  <span className="text-xs text-muted-foreground px-2">입실 원인</span>
                 </th>
                 <th className="px-2 py-3 text-left">
                   <Button
@@ -359,6 +410,11 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                     </td>
                     <td className="px-2 py-3">
                       <div className="text-sm whitespace-nowrap leading-tight">{patient.department}</div>
+                    </td>
+                    <td className="px-2 py-3">
+                      <div className="text-xs text-muted-foreground whitespace-nowrap leading-tight">
+                        {patient.admissionCause}
+                      </div>
                     </td>
                     <td className="px-2 py-3">
                       <div className="flex items-center gap-2">
@@ -462,15 +518,60 @@ export function PatientListDashboard({ patients, onSelectPatient }: PatientListD
                 );
               })}
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
+
+        {sortedAndFilteredPatients.length === 0 && (
+          <div className="text-center py-12 text-muted-foreground">
+            선택한 필터와 일치하는 환자가 없습니다.
+          </div>
+        )}
       </div>
 
-      {sortedAndFilteredPatients.length === 0 && (
-        <div className="text-center py-12 text-muted-foreground">
-          선택한 필터와 일치하는 환자가 없습니다.
+      {/* Alert Feed */}
+      <div className="space-y-4 xl:sticky xl:top-24 xl:self-start">
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg">알림 리스트</h2>
+            <div className="text-xs text-muted-foreground">
+              최신 {alertFeedItems.length}건
+            </div>
+          </div>
+          {alertFeedItems.length === 0 ? (
+            <div className="text-sm text-muted-foreground">
+              활성 알림이 없습니다.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3">
+              {alertFeedItems.map((item) => (
+                <div key={item.id} className="rounded-md border border-border bg-muted/40 p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-medium">{item.title}</div>
+                    <div
+                      className={`text-xs ${
+                        item.severity === 'high'
+                          ? 'text-red-400'
+                          : item.severity === 'medium'
+                          ? 'text-orange-400'
+                          : 'text-muted-foreground'
+                      }`}
+                    >
+                      {item.severity.toUpperCase()}
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {item.detail}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {formatDistanceToNow(item.timestamp, { addSuffix: true, locale: ko })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

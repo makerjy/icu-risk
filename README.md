@@ -107,6 +107,41 @@ npm run dev
 
 ---
 
+## 배포 서버 실행 (Docker Compose)
+배포 서버에서는 정적 빌드를 만든 뒤 Nginx 컨테이너로 서빙합니다.
+
+### 1) 프론트엔드 빌드
+```bash
+npm install
+npm run build
+```
+
+### 2) 환경변수 확인
+`.env`에 DB/모델 경로를 설정합니다.
+```bash
+DATABASE_URL=postgresql://icu:icu@db:5432/icu_risk
+MODEL_PATH=/app/model/RealMIP_Pre.pth
+MODEL_GEN_PATH=/app/model/RealMIP_Gen.pth
+MODEL_SCALER_PATH=/app/model/data_scaler.pkl
+```
+
+### 3) 전체 서비스 실행
+```bash
+docker compose up -d
+```
+
+### 4) 접속
+- 웹: `http://서버IP` (80)
+- API: `http://서버IP:8000`
+
+### 5) 중지/재시작
+```bash
+docker compose down
+docker compose restart
+```
+
+---
+
 ## API 빠른 확인
 ```bash
 curl http://localhost:8000/api/status

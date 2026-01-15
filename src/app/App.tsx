@@ -106,6 +106,32 @@ function AppContent() {
     return "normal";
   };
 
+  const buildOutOfRangeAlerts = (
+    features: Patient["features"]
+  ): Patient["outOfRangeAlerts"] => {
+    const alerts: Patient["outOfRangeAlerts"] = [];
+
+    features.forEach((feature) => {
+      const lastReading =
+        feature.readings[feature.readings.length - 1];
+      if (!lastReading) return;
+      const [low, high] = feature.normalRange;
+      if (lastReading.value < low || lastReading.value > high) {
+        alerts.push({
+          key: feature.key,
+          name: feature.name,
+          value: lastReading.value,
+          unit: feature.unit,
+          normalRange: feature.normalRange,
+          timestamp: lastReading.timestamp,
+          direction: lastReading.value < low ? "low" : "high",
+        });
+      }
+    });
+
+    return alerts;
+  };
+
   const handleUpdatePatientAlertRules = (
     icuId: string,
     rules: AlertRule[]
@@ -227,6 +253,10 @@ function AppContent() {
               timestamp: new Date(reading.timestamp),
             })),
           })),
+          medications: (patient.medications ?? []).map((med) => ({
+            ...med,
+            timestamp: new Date(med.timestamp),
+          })),
         };
 
         const riskHistory = revived.riskHistory;
@@ -251,6 +281,7 @@ function AppContent() {
           currentRisk: lastRisk,
           changeInLast30Min,
           alertRules: patientAlertRulesMap[patient.icuId],
+          outOfRangeAlerts: buildOutOfRangeAlerts(revived.features),
         };
 
         return {

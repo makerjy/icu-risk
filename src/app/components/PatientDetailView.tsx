@@ -1,5 +1,5 @@
 import { AlertRule, Patient } from '../data/mockData';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Area, AreaChart, BarChart, Bar, Cell } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, Area, ComposedChart, BarChart, Bar, Cell } from 'recharts';
 import { Button } from './ui/button';
 import { ArrowLeft, AlertTriangle, Circle } from 'lucide-react';
 import { RiskBadge } from './RiskBadge';
@@ -31,11 +31,57 @@ export function PatientDetailView({
     );
   };
   // Prepare risk data for chart
-  const riskChartData = patient.riskHistory.map(point => ({
-    time: format(point.timestamp, 'HH:mm'),
-    timestamp: point.timestamp,
-    risk: point.risk,
-  }));
+  const riskChartData = patient.riskHistory.map((point, index) => {
+    const ts = point.timestamp instanceof Date
+      ? point.timestamp.getTime()
+      : new Date(point.timestamp).getTime();
+    return {
+      index,
+      timeLabel: format(new Date(ts), 'HH:mm'),
+      timestamp: ts,
+      risk: point.risk,
+      medMarker: undefined as number | undefined,
+      medLabels: [] as string[],
+    };
+  });
+
+  const riskChartWithMeds = [...riskChartData];
+  const timeLabelByIndex = new Map<number, string>(
+    riskChartWithMeds.map((point) => [point.index, point.timeLabel])
+  );
+  const medLineLabels = new Set<string>();
+  const medLineIndices = new Set<number>();
+  patient.medications.forEach((med) => {
+    const ts = med.timestamp instanceof Date
+      ? med.timestamp.getTime()
+      : new Date(med.timestamp).getTime();
+    if (!Number.isFinite(ts) || riskChartWithMeds.length === 0) return;
+
+    let closestIndex = 0;
+    let closestDelta = Math.abs(riskChartWithMeds[0].timestamp - ts);
+    for (let i = 1; i < riskChartWithMeds.length; i += 1) {
+      const delta = Math.abs(riskChartWithMeds[i].timestamp - ts);
+      if (delta < closestDelta) {
+        closestDelta = delta;
+        closestIndex = i;
+      }
+    }
+
+    const target = riskChartWithMeds[closestIndex];
+    target.medMarker = 98;
+    const medLabel = [med.name, med.dose, med.route]
+      .filter(Boolean)
+      .join(' ');
+    target.medLabels.push(medLabel);
+    if (target.timeLabel) {
+      medLineLabels.add(target.timeLabel);
+    }
+    medLineIndices.add(target.index);
+  });
+
+  const recentMedications = [...patient.medications]
+    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+    .slice(0, 3);
 
   // Find first threshold exceedance
   const thresholdExceedanceIndex = patient.riskHistory.findIndex(point => point.risk > 70);
@@ -95,6 +141,9 @@ export function PatientDetailView({
             <p className="text-xs text-muted-foreground">
               {patient.ward} · {patient.department}
             </p>
+            <p className="text-xs text-muted-foreground">
+              입실 원인: {patient.admissionCause}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -116,22 +165,47 @@ export function PatientDetailView({
 
       {/* Risk Over Time Chart */}
       <div className="rounded-lg border border-border bg-card p-6">
-        <div className="mb-4">
-          <h2 className="text-xl">사망 위험도 추이</h2>
-          <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
-            <span>최근 6시간</span>
-            {firstExceedance && (
-              <div className="flex items-center gap-2 text-red-400">
-                <AlertTriangle className="h-4 w-4" />
-                <span>
-                  {format(firstExceedance.timestamp, 'HH:mm', { locale: ko })}에 70% 초과
-                </span>
+        <div className="mb-4 flex items-start justify-between gap-6">
+          <div>
+            <h2 className="text-xl">사망 위험도 추이</h2>
+            <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+              <span>최근 6시간</span>
+              <div className="flex items-center gap-2 text-sky-300">
+                <span className="inline-block h-3 w-px bg-sky-400" />
+                <span>투약 타임스탬프</span>
+              </div>
+              {firstExceedance && (
+                <div className="flex items-center gap-2 text-red-400">
+                  <AlertTriangle className="h-4 w-4" />
+                  <span>
+                    {format(firstExceedance.timestamp, 'HH:mm', { locale: ko })}에 70% 초과
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground min-w-[220px]">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground/80">최근 투약</div>
+            {recentMedications.length === 0 ? (
+              <div className="mt-2 text-muted-foreground">투약 기록 없음</div>
+            ) : (
+              <div className="mt-2 space-y-1">
+                {recentMedications.map((med, idx) => (
+                  <div key={`${med.name}-${idx}`} className="flex items-center justify-between gap-2">
+                    <div className="text-foreground truncate">
+                      {med.name} {med.dose} {med.route}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {format(med.timestamp, 'HH:mm')}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         </div>
         <ResponsiveContainer width="100%" height={250}>
-          <AreaChart data={riskChartData}>
+          <ComposedChart data={riskChartWithMeds}>
             <defs>
               <linearGradient id="riskGradient" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
@@ -140,9 +214,11 @@ export function PatientDetailView({
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
             <XAxis 
-              dataKey="time" 
+              dataKey="index"
+              type="number"
               stroke="var(--muted-foreground)"
               tick={{ fill: 'var(--muted-foreground)' }}
+              tickFormatter={(value) => timeLabelByIndex.get(value) ?? ''}
               interval="preserveStartEnd"
             />
             <YAxis 
@@ -151,14 +227,33 @@ export function PatientDetailView({
               domain={[0, 100]}
               label={{ value: '위험도 (%)', angle: -90, position: 'insideLeft', fill: 'var(--muted-foreground)' }}
             />
-            <Tooltip 
-              contentStyle={{ 
-                backgroundColor: 'var(--card)', 
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                color: 'var(--card-foreground)'
+            <Tooltip
+              content={({ active, payload, label }) => {
+                if (!active || !payload || payload.length === 0) return null;
+                const point = payload[0]?.payload as any;
+                const riskValue = point?.risk;
+                const meds = point?.medLabels ?? [];
+                return (
+                  <div className="rounded-md border border-border bg-card px-3 py-2 text-xs text-card-foreground shadow-sm">
+                    <div className="text-sm font-medium">
+                      {timeLabelByIndex.get(label) ?? ''}
+                    </div>
+                    <div className="mt-1 text-muted-foreground">
+                      위험도: <span className="font-mono text-foreground">{Number(riskValue).toFixed(1)}%</span>
+                    </div>
+                    {meds.length > 0 && (
+                      <div className="mt-2">
+                        <div className="text-sky-400">투약</div>
+                        <div className="mt-1 space-y-1 text-muted-foreground">
+                          {meds.map((med: string, idx: number) => (
+                            <div key={`${med}-${idx}`}>• {med}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
               }}
-              formatter={(value: number) => [`${value.toFixed(1)}%`, '위험도']}
             />
             <ReferenceLine y={70} stroke="#dc2626" strokeDasharray="5 5" label={{ value: '임계값', fill: '#dc2626', position: 'right' }} />
             <Area 
@@ -168,7 +263,27 @@ export function PatientDetailView({
               strokeWidth={3}
               fill="url(#riskGradient)"
             />
-          </AreaChart>
+            {[...medLineIndices].map((index) => (
+              <ReferenceArea
+                key={`med-band-${index}`}
+                x1={index - 0.4}
+                x2={index + 0.4}
+                fill="#22d3ee"
+                fillOpacity={0.08}
+                strokeOpacity={0}
+              />
+            ))}
+            {[...medLineIndices].map((index) => (
+              <ReferenceLine
+                key={`med-line-${index}`}
+                x={index}
+                stroke="#22d3ee"
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                strokeOpacity={0.95}
+              />
+            ))}
+          </ComposedChart>
         </ResponsiveContainer>
       </div>
 
