@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { AlertRule, Patient } from '../data/mockData';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, Area, ComposedChart, BarChart, Bar, Cell } from 'recharts';
 import { Button } from './ui/button';
@@ -34,16 +34,25 @@ export function PatientDetailView({
     );
   };
   const isLongStay = (patient.lengthOfStayDays ?? 0) >= 7;
+  const dailyBaseRef = useRef<{ id: string | null; baseRisk: number }>({
+    id: null,
+    baseRisk: 0,
+  });
+  if (dailyBaseRef.current.id !== patient.icuId) {
+    dailyBaseRef.current = { id: patient.icuId, baseRisk: patient.currentRisk };
+  }
+
   const dailyTrendData = useMemo(() => {
     if (!isLongStay) return [];
-    const days = 14;
+    const days = Math.min(14, Math.max(1, patient.lengthOfStayDays ?? 1));
     const data: Array<{
       dateLabel: string;
       dailySummary: number;
       highRiskMinutes: number;
       maxRisk: number;
     }> = [];
-    const baseRisk = patient.currentRisk;
+    const baseRisk = dailyBaseRef.current.baseRisk;
+    const todayRisk = patient.currentRisk;
     const now = new Date();
     const seed = Number(String(patient.icuId).slice(-3)) || 0;
     const stableJitter = (offset: number) =>
@@ -58,7 +67,8 @@ export function PatientDetailView({
       );
       const baselineOffset =
         dayOffset === 0 ? stableJitter(dayOffset) + todayJitter() : stableJitter(dayOffset);
-      const dayBaseline = Math.max(0, Math.min(100, baseRisk + baselineOffset));
+      const baseForDay = dayOffset === 0 ? todayRisk : baseRisk;
+      const dayBaseline = Math.max(0, Math.min(100, baseForDay + baselineOffset));
       const samples: number[] = [];
       for (let hour = 0; hour < 24; hour += 1) {
         const jitter =

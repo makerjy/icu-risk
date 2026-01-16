@@ -6,15 +6,16 @@
 ### 주요 기능
 - 실시간 위험도 모니터링 및 위험도 추이(스파크라인) 표시
 - 분 단위 추이(최근 6시간) + 예측 위험도 시각화
-- 일 단위 추이(7일 이상 재원 환자 대상) 표시
+- 일 단위 추이(7일 이상 재원 환자, 재원일수에 맞춰 최대 14일 표시)
 - 환자별 알림 규칙 설정 및 경보 상태 표시
-- 재원기간(범위) 설정으로 환자 목록/집계 필터링
+- 재원기간 설정(토글 + 범위 입력)으로 환자 목록/집계 필터링
 - 즐겨찾기 고정 및 정렬 유지
 - 알림 로그(발생 이력) 조회
-- 환자 상세 화면에서 활력징후/검사수치 상세 확인
+- 환자 상세 화면에서 활력징후/검사수치 상세 확인 (재원일수 표시 포함)
 
 ### 구현 개요 (구성 및 흐름)
 - Frontend(React/Vite)가 `/api`를 통해 FastAPI 서버에 데이터 요청
+- 실시간 업데이트는 SSE(`/api/stream/patients`)로 수신 (EventSource + 자동 재연결)
 - FastAPI가 더미 데이터 또는 모델 기반 추론 결과로 환자 목록 생성
 - Postgres에 환자별 알림 규칙/즐겨찾기/알림 로그 저장
 - 모델 추론은 PyTorch 기반, 서버 시작 시 모델과 스케일러 로드
@@ -32,9 +33,12 @@
 - 진입점: `src/main.tsx` → `src/app/App.tsx`
 - 환자 목록, 상세, 알림 설정 UI는 `src/app/components/`에 분리되어 있음
 - `/api` 프록시는 `vite.config.ts`에서 설정됨 (로컬 개발 시 `http://127.0.0.1:8000`)
+- 실시간 데이터는 SSE(EventSource)로 수신하며, 오류 시 상태 표시 후 재연결 시도
 - 상세 화면은 분 단위/일 단위 탭을 제공하며, 7일 미만 재원 환자는 일 단위 탭이 비활성화됨
-- 재원기간 설정(범위) 필터로 환자 목록/알림/집계가 즉시 갱신됨
+- 일 단위 추이는 재원일수만큼(최대 14일) 표시되며, 과거 값은 고정되고 오늘 값만 변동됨
+- 재원기간 설정(범위 입력) 필터로 환자 목록/알림/집계가 즉시 갱신됨
 - 일 단위 추이는 "일 단위 위험 요약(상위 10% 평균)"과 "고위험 지속시간(≥70%)" 지표로 구성됨
+- 상세 화면 진입 시 상단 헤더의 뒤로가기 버튼으로 대시보드 복귀 가능
 
 ### 백엔드 동작 개요
 - 엔트리 포인트: `server_fastapi/app.py`
@@ -42,9 +46,11 @@
   - `GET /api/patients`: 환자 목록
   - `GET /api/patients/{icu_id}`: 환자 상세
   - `GET /api/status`: 모델 로딩 상태
+  - `GET /api/stream/patients`: SSE 스트림 (환자 목록 실시간 전송)
   - `GET/PUT /api/patient-alert-rules`: 알림 규칙
   - `GET/POST /api/favorites`: 즐겨찾기
   - `GET/POST /api/alert-logs`: 알림 로그
+  - `GET /api/feature-order`: 검사 항목 순서
 - 주기 업데이트 루프가 환자 데이터/위험도를 갱신함
 - 응답에는 예측 위험도 시계열(`predictedRiskHistory`)과 재원일수(`length_of_stay_days`)가 포함됨
 
@@ -64,6 +70,8 @@
   - `DEMO_MODE=true|false`
   - `DEMO_RISK_SCALE` (기본 0.2)
   - `DEMO_RISK_MAX` (기본 20)
+  - `FORECAST_POINTS` (기본 12)
+  - `FORECAST_INTERVAL_MINUTES` (기본 5)
 - 데모 모드 알림 기준(기본):
   - 0~19%: 정상
   - 20% 이상: 조기 경보(주의)
@@ -123,6 +131,14 @@ npm run dev
 
 브라우저 접속:
 - `http://localhost:5173`
+
+### 4) (옵션) Node 데모 서버
+FastAPI 없이 간단히 API만 띄우고 싶을 때 사용합니다.
+```bash
+DEMO_PORT=8000 npm run demo:server
+```
+- 제공 엔드포인트: `GET /api/patients`, `GET /api/patients/{icu_id}`
+- DB/알림 규칙/스트리밍(SSE)은 포함되지 않음
 
 ---
 

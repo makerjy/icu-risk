@@ -42,6 +42,12 @@ function AppContent() {
   const hasAlertSnapshotRef = useRef(false);
   const { theme, toggleTheme } = useTheme();
 
+  useEffect(() => {
+    if (currentView === "patient-detail") {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
+  }, [currentView, selectedPatientId]);
+
   const handleSelectPatient = (icuId: string) => {
     setSelectedPatientId(icuId);
     setCurrentView("patient-detail");

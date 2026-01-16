@@ -99,21 +99,7 @@ const ADMISSION_CAUSES = [
 
 const MEDICATION_LIBRARY = [
   { name: "Norepinephrine", dose: "0.08 mcg/kg/min", route: "IV" },
-  { name: "Vasopressin", dose: "0.03 units/min", route: "IV" },
-  { name: "Vancomycin", dose: "1 g", route: "IV" },
-  { name: "Meropenem", dose: "1 g", route: "IV" },
-  { name: "Ceftriaxone", dose: "2 g", route: "IV" },
-  { name: "Furosemide", dose: "20 mg", route: "IV" },
-  { name: "Heparin", dose: "5,000 units", route: "SC" },
-  { name: "Propofol", dose: "25 mcg/kg/min", route: "IV" },
-  { name: "Insulin", dose: "4 units", route: "IV" },
-  { name: "Dexamethasone", dose: "6 mg", route: "IV" },
-  { name: "Midazolam", dose: "2 mg", route: "IV" },
-  { name: "Fentanyl", dose: "50 mcg", route: "IV" },
-  { name: "Pantoprazole", dose: "40 mg", route: "IV" },
-  { name: "Acetaminophen", dose: "650 mg", route: "PO" },
-  { name: "Albuterol", dose: "2.5 mg", route: "NEB" },
-  { name: "Rocuronium", dose: "50 mg", route: "IV" },
+  { name: "Vasopressin", dose: "0.03 units/min", route: "IV" }
 ];
 
 const applyRound = (value, round) =>
