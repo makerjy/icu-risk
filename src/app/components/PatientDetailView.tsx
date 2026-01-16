@@ -97,6 +97,32 @@ export function PatientDetailView({
   }, [isLongStay, patient.currentRisk, patient.icuId]);
 
   // Prepare risk data for chart
+  const buildFallbackForecast = (history: Patient['riskHistory']) => {
+    if (!history.length) return [];
+    const recent = history.slice(-Math.min(history.length, 6));
+    const slope =
+      (recent[recent.length - 1].risk - recent[0].risk) /
+      Math.max(recent.length - 1, 1);
+    const lastPoint = history[history.length - 1];
+    const lastTs =
+      lastPoint.timestamp instanceof Date
+        ? lastPoint.timestamp.getTime()
+        : new Date(lastPoint.timestamp).getTime();
+    const points = 12;
+    const intervalMinutes = 5;
+    return Array.from({ length: points }, (_, idx) => {
+      const step = idx + 1;
+      const timestamp = new Date(
+        lastTs + step * intervalMinutes * 60 * 1000
+      );
+      const risk = Math.max(
+        0,
+        Math.min(100, lastPoint.risk + slope * step)
+      );
+      return { timestamp, risk: Number(risk.toFixed(2)) };
+    });
+  };
+
   const riskChartData = patient.riskHistory.map((point, index) => {
     const ts = point.timestamp instanceof Date
       ? point.timestamp.getTime()
@@ -114,9 +140,13 @@ export function PatientDetailView({
 
   const riskChartWithMeds = [...riskChartData];
   const predictedHistory = patient.predictedRiskHistory ?? [];
-  if (predictedHistory.length > 0) {
+  const forecastHistory =
+    predictedHistory.length > 0
+      ? predictedHistory
+      : buildFallbackForecast(patient.riskHistory);
+  if (forecastHistory.length > 0) {
     const actualPoints = riskChartWithMeds.length;
-    predictedHistory.forEach((point, idx) => {
+    forecastHistory.forEach((point, idx) => {
       const ts = point.timestamp instanceof Date
         ? point.timestamp.getTime()
         : new Date(point.timestamp).getTime();

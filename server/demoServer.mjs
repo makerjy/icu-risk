@@ -99,8 +99,15 @@ const ADMISSION_CAUSES = [
 
 const MEDICATION_LIBRARY = [
   { name: "Norepinephrine", dose: "0.08 mcg/kg/min", route: "IV" },
-  { name: "Vasopressin", dose: "0.03 units/min", route: "IV" }
+  { name: "Vasopressin", dose: "0.03 units/min", route: "IV" },
 ];
+const VASOPRESSOR_NAMES = new Set(["Norepinephrine", "Vasopressin"]);
+const VASOPRESSOR_LIBRARY = MEDICATION_LIBRARY.filter((med) =>
+  VASOPRESSOR_NAMES.has(med.name)
+);
+const NON_VASOPRESSOR_LIBRARY = MEDICATION_LIBRARY.filter(
+  (med) => !VASOPRESSOR_NAMES.has(med.name)
+);
 
 const applyRound = (value, round) =>
   typeof round === "number" ? Number(value.toFixed(round)) : value;
@@ -294,12 +301,16 @@ const buildFeatures = () => {
   });
 };
 
-const buildMedications = (baseTime, seed) => {
+const buildMedications = (baseTime, seed, includeVasopressors = false) => {
   const count = 3 + Math.floor(seededRandom(seed + 101) * 5);
   const meds = [];
+  const baseLibrary =
+    NON_VASOPRESSOR_LIBRARY.length > 0
+      ? NON_VASOPRESSOR_LIBRARY
+      : MEDICATION_LIBRARY;
 
   for (let i = 0; i < count; i += 1) {
-    const med = MEDICATION_LIBRARY[(seed + i * 3) % MEDICATION_LIBRARY.length];
+    const med = baseLibrary[(seed + i * 3) % baseLibrary.length];
     const minutesAgo = 20 + i * 55 + ((seed + i * 11) % 20);
     meds.push({
       name: med.name,
@@ -307,6 +318,21 @@ const buildMedications = (baseTime, seed) => {
       route: med.route,
       timestamp: new Date(baseTime.getTime() - minutesAgo * 60 * 1000),
     });
+  }
+
+  if (includeVasopressors && VASOPRESSOR_LIBRARY.length > 0) {
+    const pressorCount = seededRandom(seed + 303) > 0.7 ? 2 : 1;
+    for (let i = 0; i < pressorCount; i += 1) {
+      const med =
+        VASOPRESSOR_LIBRARY[(seed + i) % VASOPRESSOR_LIBRARY.length];
+      const minutesAgo = 10 + i * 35 + ((seed + i * 7) % 15);
+      meds.push({
+        name: med.name,
+        dose: med.dose,
+        route: med.route,
+        timestamp: new Date(baseTime.getTime() - minutesAgo * 60 * 1000),
+      });
+    }
   }
 
   return meds.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
@@ -399,16 +425,22 @@ const createPatient = (index) => {
       : clamp(Math.round(1 + seededRandom(index + 99) * 6), 1, 6);
   const baseTime = new Date();
   const riskJitter = (seededRandom(index + 1) - 0.5) * 1.2;
-  const currentRisk = applyDemoRisk(
-    clamp(
-      Number((profile.currentRisk + riskJitter).toFixed(2)),
-      0,
-      DEMO_MODE ? DEMO_RISK_MAX : 100
-    )
+  const rawRisk = clamp(
+    Number((profile.currentRisk + riskJitter).toFixed(2)),
+    0,
+    DEMO_MODE ? DEMO_RISK_MAX : 100
   );
+  const currentRisk = applyDemoRisk(rawRisk);
   const age = clamp(Math.round(30 + (seededRandom(index + 7) + 0.5) * 55), 18, 90);
   const sex = seededRandom(index + 11) > 0 ? "M" : "F";
-  const medications = buildMedications(baseTime, index);
+  const includeVasopressors =
+    rawRisk >= 7.2 ||
+    (rawRisk >= 6 && seededRandom(index + 317) > 0.75);
+  const medications = buildMedications(
+    baseTime,
+    index,
+    includeVasopressors
+  );
 
   const patient = {
     icuId: String(stayId),

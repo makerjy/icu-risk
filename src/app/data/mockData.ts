@@ -387,6 +387,13 @@ const MEDICATION_LIBRARY = [
   { name: 'Albuterol', dose: '2.5 mg', route: 'NEB' },
   { name: 'Rocuronium', dose: '50 mg', route: 'IV' },
 ];
+const VASOPRESSOR_NAMES = new Set(['Norepinephrine', 'Vasopressin']);
+const VASOPRESSOR_LIBRARY = MEDICATION_LIBRARY.filter((med) =>
+  VASOPRESSOR_NAMES.has(med.name)
+);
+const NON_VASOPRESSOR_LIBRARY = MEDICATION_LIBRARY.filter(
+  (med) => !VASOPRESSOR_NAMES.has(med.name)
+);
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -433,12 +440,20 @@ function buildFeatures(profileIndex: number): Feature[] {
   });
 }
 
-function buildMedications(baseTime: Date, index: number): MedicationAdministration[] {
+function buildMedications(
+  baseTime: Date,
+  index: number,
+  includeVasopressors = false
+): MedicationAdministration[] {
   const count = 3 + Math.floor(seededRandom(index + 101) * 5);
   const meds: MedicationAdministration[] = [];
+  const baseLibrary =
+    NON_VASOPRESSOR_LIBRARY.length > 0
+      ? NON_VASOPRESSOR_LIBRARY
+      : MEDICATION_LIBRARY;
 
   for (let i = 0; i < count; i += 1) {
-    const med = MEDICATION_LIBRARY[(index + i * 3) % MEDICATION_LIBRARY.length];
+    const med = baseLibrary[(index + i * 3) % baseLibrary.length];
     const minutesAgo = 20 + i * 55 + ((index + i * 11) % 20);
     meds.push({
       name: med.name,
@@ -446,6 +461,21 @@ function buildMedications(baseTime: Date, index: number): MedicationAdministrati
       route: med.route,
       timestamp: new Date(baseTime.getTime() - minutesAgo * 60 * 1000),
     });
+  }
+
+  if (includeVasopressors && VASOPRESSOR_LIBRARY.length > 0) {
+    const pressorCount = seededRandom(index + 303) > 0.7 ? 2 : 1;
+    for (let i = 0; i < pressorCount; i += 1) {
+      const med =
+        VASOPRESSOR_LIBRARY[(index + i) % VASOPRESSOR_LIBRARY.length];
+      const minutesAgo = 10 + i * 35 + ((index + i * 7) % 15);
+      meds.push({
+        name: med.name,
+        dose: med.dose,
+        route: med.route,
+        timestamp: new Date(baseTime.getTime() - minutesAgo * 60 * 1000),
+      });
+    }
   }
 
   return meds.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
@@ -507,7 +537,13 @@ function createPatient(index: number): Patient {
   );
   const sex: 'F' | 'M' = seededRandom(index + 11) > 0.48 ? 'M' : 'F';
   const baseTime = new Date();
-  const medications = buildMedications(baseTime, index);
+  const includeVasopressors =
+    rawRisk >= 7.2 || (rawRisk >= 6 && seededRandom(index + 317) > 0.75);
+  const medications = buildMedications(
+    baseTime,
+    index,
+    includeVasopressors
+  );
   const features = buildFeatures(index);
   const outOfRangeAlerts = buildOutOfRangeAlerts(features);
 

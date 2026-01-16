@@ -261,6 +261,13 @@ MEDICATION_LIBRARY = [
     {"name": "Albuterol", "dose": "2.5 mg", "route": "NEB"},
     {"name": "Rocuronium", "dose": "50 mg", "route": "IV"},
 ]
+VASOPRESSOR_NAMES = {"Norepinephrine", "Vasopressin"}
+VASOPRESSOR_LIBRARY = [
+    med for med in MEDICATION_LIBRARY if med["name"] in VASOPRESSOR_NAMES
+]
+NON_VASOPRESSOR_LIBRARY = [
+    med for med in MEDICATION_LIBRARY if med["name"] not in VASOPRESSOR_NAMES
+]
 
 def seeded_random(seed: int) -> float:
     value = random.Random(seed).random()
@@ -506,12 +513,17 @@ def build_features(profile_index: int) -> List[dict]:
     return features
 
 
-def build_medications(base_time: datetime, seed: int) -> List[dict]:
+def build_medications(
+    base_time: datetime, seed: int, include_vasopressors: bool = False
+) -> List[dict]:
     rng = random.Random(seed + 101)
     count = 3 + rng.randint(0, 4)
     medications = []
+    base_library = (
+        NON_VASOPRESSOR_LIBRARY if NON_VASOPRESSOR_LIBRARY else MEDICATION_LIBRARY
+    )
     for idx in range(count):
-        med = MEDICATION_LIBRARY[(seed + idx * 3) % len(MEDICATION_LIBRARY)]
+        med = base_library[(seed + idx * 3) % len(base_library)]
         minutes_ago = 20 + idx * 55 + ((seed + idx * 11) % 20)
         timestamp = base_time - timedelta(minutes=minutes_ago)
         medications.append(
@@ -522,6 +534,21 @@ def build_medications(base_time: datetime, seed: int) -> List[dict]:
                 "timestamp": isoformat_utc(timestamp),
             }
         )
+
+    if include_vasopressors and VASOPRESSOR_LIBRARY:
+        pressor_count = 2 if rng.random() > 0.7 else 1
+        for idx in range(pressor_count):
+            med = VASOPRESSOR_LIBRARY[(seed + idx) % len(VASOPRESSOR_LIBRARY)]
+            minutes_ago = 10 + idx * 35 + ((seed + idx * 7) % 15)
+            timestamp = base_time - timedelta(minutes=minutes_ago)
+            medications.append(
+                {
+                    "name": med["name"],
+                    "dose": med["dose"],
+                    "route": med["route"],
+                    "timestamp": isoformat_utc(timestamp),
+                }
+            )
     return sorted(medications, key=lambda item: item["timestamp"])
 
 
@@ -657,15 +684,16 @@ def create_patient(index: int) -> dict:
         icu_stay_days = int(clamp(1 + seeded_random(index + 99) * 6, 1, 6))
     icu_stay_days = get_or_create_stay_days(str(stay_id), icu_stay_days)
     base_time = now_utc()
-    risk_jitter = (seeded_random(index + 1)) * 1.2
-    current_risk = round(
-        clamp(profile["current_risk"] + risk_jitter, 0, 25), 2
-    )
-    current_risk = round(apply_demo_risk(current_risk), 2)
+    risk_jitter = seeded_random(index + 1) * 1.2
+    raw_risk = round(clamp(profile["current_risk"] + risk_jitter, 0, 25), 2)
+    current_risk = round(apply_demo_risk(raw_risk), 2)
     age = int(clamp(30 + (seeded_random(index + 7) + 0.5) * 55, 18, 90))
     sex = "M" if seeded_random(index + 11) > 0 else "F"
     features = build_features(index)
-    medications = build_medications(base_time, index)
+    include_vasopressors = raw_risk >= 7.2 or (
+        raw_risk >= 6 and random.Random(index + 317).random() > 0.75
+    )
+    medications = build_medications(base_time, index, include_vasopressors)
     patient = {
         "icuId": str(stay_id),
         "bedNumber": bed_number,
